@@ -1,0 +1,7 @@
+/build*/
+*.bmp
+*.jsonl
+.DS_Store
+/.cache/
+/.idea/
+/.vscode/
