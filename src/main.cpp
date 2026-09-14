@@ -30,6 +30,22 @@ float fraction(const std::string& value, const char* option) {
         throw std::invalid_argument(std::string(option) + " must be between 0 and 1");
     return result;
 }
+pixels::WorldShape shape(const std::string& value) {
+    if (value == "island") return pixels::WorldShape::Island;
+    if (value == "archipelago") return pixels::WorldShape::Archipelago;
+    if (value == "inland-sea" || value == "inlandsea") return pixels::WorldShape::InlandSea;
+    if (value == "highlands") return pixels::WorldShape::Highlands;
+    if (value == "riverlands") return pixels::WorldShape::Riverlands;
+    throw std::invalid_argument("--shape must be island, archipelago, inland-sea, highlands or riverlands");
+}
+pixels::WorldSize worldSize(const std::string& value) {
+    if (value == "tiny") return pixels::WorldSize::Tiny;
+    if (value == "small") return pixels::WorldSize::Small;
+    if (value == "classic") return pixels::WorldSize::Classic;
+    if (value == "large") return pixels::WorldSize::Large;
+    if (value == "huge") return pixels::WorldSize::Huge;
+    throw std::invalid_argument("--size must be tiny, small, classic, large or huge");
+}
 std::string jsonString(const std::string& value) {
     std::string out = "\"";
     for (unsigned char c : value) {
@@ -53,6 +69,8 @@ Usage: pixel-society [options]
   --fertility F        Resource richness, 0..1 (default 0.65)
   --cooperation F      Initial social disposition, 0..1 (default 0.7)
   --hazards F          Environmental hazard intensity, 0..1 (default 0.35)
+  --shape NAME         Terrain: island, archipelago, inland-sea, highlands, riverlands
+  --size NAME          World: tiny 48x32, small 64x40, classic 96x64, large 128x80, huge 192x128
   --headless           Run without graphics for experiments
   --ticks N            Headless ticks (default 3000); each represents 0.2 seconds
   --threads N          Worker threads for the simulation pool (default: all cores)
@@ -87,6 +105,8 @@ int main(int argc, char** argv) {
             else if (option == "--fertility") config.fertility = fraction(next(), "--fertility");
             else if (option == "--cooperation") config.cooperation = fraction(next(), "--cooperation");
             else if (option == "--hazards") config.hazards = fraction(next(), "--hazards");
+            else if (option == "--shape") config.shape = shape(next());
+            else if (option == "--size") config.worldSize = worldSize(next());
             else if (option == "--ticks") ticks = integer<std::uint64_t>(next(), "--ticks");
             else if (option == "--headless") headless = true;
             else if (option == "--threads") config.threads = integer<int>(next(), "--threads");
@@ -147,6 +167,9 @@ int main(int argc, char** argv) {
         std::cout << "{\"seed\":" << config.seed << ",\"ticks\":" << simulation.tick()
                   << ",\"simulated_seconds\":" << static_cast<double>(simulation.tick()) / pixels::TicksPerSecond
                   << ",\"wall_seconds\":" << elapsed << ",\"threads\":" << pixels::parallel::workerCount()
+                  << ",\"shape\":" << jsonString(pixels::nameOf(config.shape))
+                  << ",\"size\":" << jsonString(pixels::nameOf(config.worldSize))
+                  << ",\"width\":" << simulation.width() << ",\"height\":" << simulation.height()
                   << ",\"population\":" << s.population
                   << ",\"births\":" << s.births << ",\"deaths\":" << s.deaths
                   << ",\"homes\":" << s.homes << ",\"farms\":" << s.farms

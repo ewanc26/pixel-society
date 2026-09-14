@@ -397,6 +397,7 @@ float SocietyCore::train(const CoreInput& society, const Values& targets, float 
         for (int i = 0; i < InputCount; ++i)
             updateParameter(c1_[h][i], rate, firstDelta[h] * pass.input[i]);
     }
+    digestValid_ = false;
     return loss / static_cast<float>(ActionCount);
 }
 
@@ -408,6 +409,7 @@ int SocietyCore::parameterCount() {
 }
 
 std::uint64_t SocietyCore::digest() const {
+    if (digestValid_) return cachedDigest_;
     std::uint64_t hash = 14695981039346656037ull;
     auto includeByte = [&](std::uint8_t byte) {
         hash ^= byte;
@@ -427,7 +429,9 @@ std::uint64_t SocietyCore::digest() const {
     for (float weight : cb3_) include(weight);
     for (const auto& row : c4_) for (float weight : row) include(weight);
     for (float weight : cb4_) include(weight);
-    return hash;
+    cachedDigest_ = hash;
+    digestValid_ = true;
+    return cachedDigest_;
 }
 
 std::shared_ptr<SocietyCore> makeSocietyCore(std::uint32_t seed) {

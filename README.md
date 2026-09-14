@@ -2,10 +2,11 @@
 
 **Set the starting conditions. Let the pixels decide what happens next.**
 
-A native C++20 artificial-life simulation of an autonomous society. Seed an
-island, choose its population, resources, cooperation and hazard level, then
-watch its citizens forage, build, farm, share, form new generations and struggle
-to survive. Once the simulation begins, the interface only observes.
+A native C++20 artificial-life simulation of an autonomous society. Seed a
+landscape, choose its terrain shape, scale, population, resources, cooperation
+and hazard level, then watch citizens forage, build, farm, share, form new
+generations and struggle to survive. Once the simulation begins, the interface
+only observes.
 
 A shared **society core** (82 → 2048 → 2560 → 2560 → 12,
 **12,002,316 trainable parameters**) reads the living population's average
@@ -44,7 +45,10 @@ only changes what you see. Close the window to finish the experiment.
 
 ## A society, tick by tick
 
-- A seeded 96 × 64 world supplies land, water, forests and renewable food.
+- Five terrain shapes — island, archipelago, inland sea, highlands and
+  riverlands — are available at five scales from 48 × 32 to 192 × 128. Each
+  is deterministic from the chosen seed and supplies distinct routes, coasts,
+  forests and renewable food.
 - Individual citizens experience hunger, thirst, fatigue, health and social needs.
 - Neural outputs rank twelve intentions: wander, gather, eat, drink, rest, chop,
   build, farm, share, socialize, reproduce and attack.
@@ -111,14 +115,16 @@ are identical whether it runs with one thread or many.
 ./build/pixel-society --headless --seed 42 --ticks 6000 --events events.jsonl
 ./build/pixel-society --headless --seed 42 --ticks 50 --realtime
 ./build/pixel-society --headless --seed 123 --founders 72 --threads 2
+./build/pixel-society --headless --seed 123 --shape archipelago --size large --ticks 1200
 ./build/pixel-society --seed 123 --founders 72 --fertility 0.8 --cooperation 0.9
 ./build/pixel-society --help
 ```
 
-Headless output is a JSON summary including population, births, deaths,
-construction, neural decisions, learning updates, the worker count and a
-reproducibility digest. The optional JSONL event log contains every recorded
-event, its tick, coordinates, category, text and score. The desktop keeps a
+Headless output is a JSON summary including the selected terrain shape and
+dimensions, population, births, deaths, construction, neural decisions,
+learning updates, the worker count and a reproducibility digest. The optional
+JSONL event log contains every recorded event, its tick, coordinates, category,
+text and score. The desktop keeps a
 bounded recent journal in memory. An event's importance is separate from neural
 action values or learning rewards.
 
@@ -157,15 +163,16 @@ Tests cover 82 finite normalized observations across individual and world
 change, a high-index sensor that changes learned action values, deeper neural
 learning and decision changes, legal action masking, inheritance and cultural
 imitation, five-tick timing with retained frame debt, seeded determinism,
-autonomous construction and births, the emergent disease, fire-succession and
-transmission mechanics, deterministic civilisation territory and its visible
-borders, resource and population invariants, event scores, and
-extreme starting conditions. The society-core constructor is asserted to be over ten
-million parameters, its training is deterministic across identical seeds, and
-a dedicated check proves per-citizen policies react to the advisory channels.
-The interface smoke test injects SDL input through setup and observation
-controls, and compares the resulting world with an unattended simulation to
-detect accidental player influence.
+autonomous construction and births, all five terrain shapes and world-size
+presets, the emergent disease, fire-succession and transmission mechanics,
+deterministic civilisation territory and its visible borders, resource and
+population invariants, event scores, and extreme starting conditions. The
+society-core constructor is asserted to be over ten million parameters, its
+training is deterministic across identical seeds, and a dedicated check proves
+per-citizen policies react to the advisory channels. The interface smoke test
+injects setup and observation controls, including shape and size selection, and
+compares the resulting world with an unattended simulation to detect accidental
+player influence.
 
 The CI workflow runs macOS and Linux builds, plus an address/undefined-behaviour
 sanitizer build. See [verification evidence](docs/VERIFICATION.md).

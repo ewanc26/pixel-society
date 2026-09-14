@@ -19,12 +19,21 @@
 namespace pixels {
 namespace {
 constexpr int Width = 768, Height = 512;
-constexpr int MapX = 16, MapY = 116, Cell = 5;
 using Color = std::uint32_t;
 constexpr Color Ink = 0xff10252c, Panel = 0xff19343a, Edge = 0xff2b494d;
 constexpr Color Cream = 0xffe4e9d1, Muted = 0xff90aaa4, Teal = 0xff64c7b2;
 constexpr Color Gold = 0xfff2be64, Red = 0xffe88c77, Dark = 0xff0b1e25;
 constexpr std::array<Color, 6> Clans{Gold, 0xfff099ab, 0xff91d3e6, 0xffc9b3eb, 0xffa9d88b, 0xffefad7c};
+
+// The left map panel is 480 by 320 at 16,116. The world's pixel cell shrinks to
+// fit the chosen preset, so the map is always fully visible and centered.
+struct MapView { int x, y, cell, w, h; };
+MapView mapView(const Simulation& sim) {
+    constexpr int panelW = 480, panelH = 320;
+    const int cell = std::max(1, std::min(5, std::min(panelW / sim.width(), panelH / sim.height())));
+    const int w = sim.width() * cell, h = sim.height() * cell;
+    return {16 + (panelW - w) / 2, 116 + (panelH - h) / 2, cell, w, h};
+}
 
 // Original 5 by 7 bitmap lettering: every visible mark is drawn into the pixel canvas.
 std::array<unsigned char, 7> glyph(char c) {
@@ -190,10 +199,11 @@ void selectAt(const Simulation& sim, View& view, int x, int y) {
 
 void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
     const bool winter = sim.seasonName() == "Winter" || sim.seasonName() == "WINTER";
-    for (int y = 0; y < WorldHeight; ++y) {
-        for (int x = 0; x < WorldWidth; ++x) {
+    const MapView map = mapView(sim);
+    for (int y = 0; y < sim.height(); ++y) {
+        for (int x = 0; x < sim.width(); ++x) {
             const auto& tile = sim.tile(x,y);
-            const int px = MapX+x*Cell, py = MapY+y*Cell;
+            const int px = map.x+x*map.cell, py = map.y+y*map.cell;
             const unsigned noise = static_cast<unsigned>(x*1973+y*9277+(x*y)*13);
             Color base = 0xff477963;
             switch (tile.terrain) {
@@ -204,7 +214,7 @@ void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
             case Terrain::Rock: base = 0xff76817b; break;
             }
             base = blend(base, (noise%3 == 0 ? Cream : Dark),0.035f*static_cast<float>(noise%3));
-            out.rect(px,py,Cell,Cell,base);
+            out.rect(px,py,map.cell,map.cell,base);
             if (tile.terrain == Terrain::Water) {
                 if ((noise+sim.tick()/3)%9 == 0) out.rect(px+1,py+2,3,1,0xff407d8c);
                 if (noise%11 == 0) out.pixel(px,py,0xff4c8793);
@@ -224,7 +234,7 @@ void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
             if (view.layer == 1 && tile.terrain != Terrain::Water)
                 out.rect(px+1,py+1,3,3,blend(0xff6e503e,Teal,std::clamp(tile.fertility,0.0f,1.0f)));
             if (view.layer == 3 && sim.territory(x,y) >= 0)
-                out.rect(px,py,Cell,Cell,blend(base,clanColor(sim.territory(x,y)),0.30f));
+                out.rect(px,py,map.cell,map.cell,blend(base,clanColor(sim.territory(x,y)),0.30f));
             if (tile.structure == Structure::Home) {
                 out.rect(px+1,py+2,3,3,0xffead6a3);
                 out.rect(px,py+1,5,1,0xffab6552); out.rect(px+1,py,3,1,Red);
@@ -241,7 +251,7 @@ void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
     }
     for (const auto& c : sim.citizens()) {
         if (!c.alive) continue;
-        const int x = MapX+c.x*Cell, y = MapY+c.y*Cell;
+        const int x = map.x+c.x*map.cell, y = map.y+c.y*map.cell;
         const Color color = view.layer == 1 ? blend(Teal,Red,std::max(c.hunger,c.thirst)) : clanColor(c.clan);
         if (view.layer == 2) out.frame(x-1,y-1,7,7,color);
         out.rect(x+1,y+3,3,2,0xff203c37);
@@ -249,7 +259,7 @@ void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
         out.pixel(x+2,y, Cream);
     }
     if (const auto* c = selected(sim,view); c && c->alive) {
-        const int x = MapX+c->x*Cell, y = MapY+c->y*Cell;
+        const int x = map.x+c->x*map.cell, y = map.y+c->y*map.cell;
         // Brackets keep the resident visible, even in crowded settlements.
         for (int side : {-1,1}) {
             const int xx = x+2+side*5;
@@ -263,24 +273,24 @@ void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
         // claimed differently (or not at all), except across water and rock.
         constexpr Color Frontier = 0xfff6f2dc;
         const auto& tiles = sim.tiles();
-        for (int y = 0; y < WorldHeight; ++y) {
-            for (int x = 0; x < WorldWidth; ++x) {
-                const int cell = y*WorldWidth+x;
+        for (int y = 0; y < sim.height(); ++y) {
+            for (int x = 0; x < sim.width(); ++x) {
+                const int cell = y*sim.width()+x;
                 const int here = sim.territory(x,y);
-                if (x+1 < WorldWidth &&
+                if (x+1 < sim.width() &&
                     tiles[static_cast<std::size_t>(cell)].terrain != Terrain::Water &&
                     tiles[static_cast<std::size_t>(cell+1)].terrain != Terrain::Water &&
                     here != sim.territory(x+1,y))
-                    out.rect(MapX+(x+1)*Cell-1,MapY+y*Cell,1,Cell,Frontier);
-                if (y+1 < WorldHeight &&
+                    out.rect(map.x+(x+1)*map.cell-1,map.y+y*map.cell,1,map.cell,Frontier);
+                if (y+1 < sim.height() &&
                     tiles[static_cast<std::size_t>(cell)].terrain != Terrain::Rock &&
-                    tiles[static_cast<std::size_t>(cell+WorldWidth)].terrain != Terrain::Rock &&
+                    tiles[static_cast<std::size_t>(cell+sim.width())].terrain != Terrain::Rock &&
                     here != sim.territory(x,y+1))
-                    out.rect(MapX+x*Cell,MapY+(y+1)*Cell-1,Cell,1,Frontier);
+                    out.rect(map.x+x*map.cell,map.y+(y+1)*map.cell-1,map.cell,1,Frontier);
             }
         }
     }
-    out.frame(MapX-1,MapY-1,WorldWidth*Cell+2,WorldHeight*Cell+2,Edge);
+    out.frame(map.x-1,map.y-1,map.w+2,map.h+2,Edge);
     if (sim.stats().population == 0) {
         out.rect(116,248,280,52,Dark); out.frame(116,248,280,52,Edge);
         out.text(134,260,"THE LAST LIGHT HAS GONE",Cream);
@@ -453,6 +463,8 @@ std::string settingValue(const Config& config, int field) {
     case 1: return std::to_string(config.founders);
     case 2: return std::to_string(percent(config.fertility))+"%";
     case 3: return std::to_string(percent(config.cooperation))+"%";
+    case 5: return nameOf(config.shape);
+    case 6: return nameOf(config.worldSize);
     default: return std::to_string(percent(config.hazards))+"%";
     }
 }
@@ -463,6 +475,8 @@ void adjust(Config& config, int field, int direction) {
     case 2: config.fertility = std::clamp(config.fertility+direction*0.05f,0.0f,1.0f); break;
     case 3: config.cooperation = std::clamp(config.cooperation+direction*0.05f,0.0f,1.0f); break;
     case 4: config.hazards = std::clamp(config.hazards+direction*0.05f,0.0f,1.0f); break;
+    case 5: config.shape = static_cast<WorldShape>((static_cast<int>(config.shape)+direction+5)%5); break;
+    case 6: config.worldSize = static_cast<WorldSize>((static_cast<int>(config.worldSize)+direction+5)%5); break;
     }
 }
 void darken(Canvas& out) {
@@ -474,22 +488,22 @@ void drawSetup(Canvas& out, const Config& config, int selectedField) {
     out.rect(144,95,480,3,Teal);
     out.text(168,113,"THE FIRST CONDITIONS",Cream,2);
     out.text(168,139,"YOUR ONLY INTERVENTION. THEIR ENTIRE FUTURE.",Muted);
-    const std::array<const char*,5> labels{"WORLD SEED","FOUNDING CITIZENS","LAND FERTILITY","COOPERATION","NATURAL HAZARDS"};
-    const std::array<const char*,5> hints{"DETERMINISTIC WORLD","INITIAL POPULATION","FOOD REGENERATION","FOUNDERS' SOCIAL TRAIT","FIRE AND RAINSTORMS"};
-    for (int i = 0; i < 5; ++i) {
-        const int y = 163+i*34;
-        out.rect(164,y,440,30,i == selectedField ? Panel : Dark);
-        if (i == selectedField) out.rect(164,y,2,30,Teal);
+    const std::array<const char*,7> labels{"WORLD SEED","FOUNDING CITIZENS","LAND FERTILITY","COOPERATION","NATURAL HAZARDS","WORLD SHAPE","WORLD SIZE"};
+    const std::array<const char*,7> hints{"DETERMINISTIC WORLD","INITIAL POPULATION","FOOD REGENERATION","FOUNDERS' SOCIAL TRAIT","FIRE AND RAINSTORMS","ISLAND / ARCHIPELAGO / SEAS / RANGES","TINY TO HUGE MAP"};
+    for (int i = 0; i < 7; ++i) {
+        const int y = 148+i*30;
+        out.rect(164,y,440,27,i == selectedField ? Panel : Dark);
+        if (i == selectedField) out.rect(164,y,2,27,Teal);
         out.text(174,y+5,labels[i],i == selectedField ? Cream : Muted);
-        out.text(174,y+17,hints[i],Muted);
-        out.rect(446,y+6,22,19,Edge); out.text(454,y+12,"-",Cream);
-        out.text(475,y+12,settingValue(config,i),i == selectedField ? Gold : Cream);
-        out.rect(574,y+6,22,19,Edge); out.text(582,y+12,"+",Cream);
+        out.text(174,y+15,hints[i],Muted);
+        out.rect(446,y+4,22,19,Edge); out.text(454,y+10,"-",Cream);
+        out.text(475,y+10,settingValue(config,i),i == selectedField ? Gold : Cream);
+        out.rect(574,y+4,22,19,Edge); out.text(582,y+10,"+",Cream);
     }
-    out.text(168,341,"ARROWS ADJUST / CLICK - + / ENTER TO BEGIN",Muted);
-    out.text(168,358,"NO PAUSE. NO ORDERS. JUST OBSERVATION.",Gold);
-    out.rect(168,378,432,27,Teal);
-    out.text(264,388,"START THE SIMULATION  >",Dark);
+    out.text(168,376,"ARROWS ADJUST / CLICK - + / ENTER TO BEGIN",Muted);
+    out.text(168,392,"NO PAUSE. NO ORDERS. JUST OBSERVATION.",Gold);
+    out.rect(168,408,432,27,Teal);
+    out.text(264,418,"START THE SIMULATION  >",Dark);
 }
 void drawHelp(Canvas& out) {
     darken(out);
@@ -581,6 +595,11 @@ int runUi(const UiOptions& options) {
     while (running) {
         const auto frameStart = Clock::now();
         if (options.smokeTest && smokePhase == 0) {
+            // Exercise all new setup paths before start: founders, shape and
+            // size.  The later reference simulation must receive exactly the
+            // same frozen draft, proving these controls remain setup-only.
+            pushKey(SDLK_DOWN); pushKey(SDLK_RIGHT);
+            pushKey(SDLK_DOWN); pushKey(SDLK_DOWN); pushKey(SDLK_DOWN); pushKey(SDLK_DOWN); pushKey(SDLK_RIGHT);
             pushKey(SDLK_DOWN); pushKey(SDLK_RIGHT);
             smokePhase = -1;
         }
@@ -592,8 +611,8 @@ int runUi(const UiOptions& options) {
                 if (key == SDLK_ESCAPE) {
                     if (view.help) view.help = false; else running = false;
                 } else if (!started) {
-                    if (key == SDLK_UP) selectedField = (selectedField+4)%5;
-                    if (key == SDLK_DOWN || key == SDLK_TAB) selectedField = (selectedField+1)%5;
+                    if (key == SDLK_UP) selectedField = (selectedField+6)%7;
+                    if (key == SDLK_DOWN || key == SDLK_TAB) selectedField = (selectedField+1)%7;
                     if (key == SDLK_LEFT) adjust(draft,selectedField,-1);
                     if (key == SDLK_RIGHT) adjust(draft,selectedField,1);
                     if (key == SDLK_RETURN || key == SDLK_KP_ENTER) begin();
@@ -609,16 +628,17 @@ int runUi(const UiOptions& options) {
                 if (!inside(event.button.x,event.button.y,area.x,area.y,area.w,area.h)) continue;
                 const int x = (event.button.x-area.x)*Width/area.w, y = (event.button.y-area.y)*Height/area.h;
                 if (!started) {
-                    for (int i = 0; i < 5; ++i) {
-                        const int yy = 163+i*34;
-                        if (inside(x,y,164,yy,440,30)) selectedField = i;
-                        if (inside(x,y,446,yy+6,22,19)) adjust(draft,i,-1);
-                        if (inside(x,y,574,yy+6,22,19)) adjust(draft,i,1);
+                    for (int i = 0; i < 7; ++i) {
+                        const int yy = 148+i*30;
+                        if (inside(x,y,164,yy,440,27)) selectedField = i;
+                        if (inside(x,y,446,yy+4,22,19)) adjust(draft,i,-1);
+                        if (inside(x,y,574,yy+4,22,19)) adjust(draft,i,1);
                     }
-                    if (inside(x,y,168,378,432,27)) begin();
+                    if (inside(x,y,168,408,432,27)) begin();
                 } else if (!view.help) {
-                    if (inside(x,y,MapX,MapY,WorldWidth*Cell,WorldHeight*Cell))
-                        selectAt(*sim,view,(x-MapX)/Cell,(y-MapY)/Cell);
+                    const MapView map = mapView(*sim);
+                    if (inside(x,y,map.x,map.y,map.w,map.h))
+                        selectAt(*sim,view,(x-map.x)/map.cell,(y-map.y)/map.cell);
                     for (int i = 0; i < 4; ++i)
                         if (inside(x,y,16+i*104,99,98,14)) view.layer = i;
                 }
@@ -633,14 +653,17 @@ int runUi(const UiOptions& options) {
         last = now;
         if (options.smokeTest && !started && smokePhase == -1 && now-start >= std::chrono::milliseconds(300)) {
             smokeSetupFrozen = sim->tick() == 0 && sim->digest() == setupDigest;
-            pushClick(sdl.window,384,391);
+            pushClick(sdl.window,384,421);
             smokePhase = 1;
         }
         if (options.smokeTest && started) {
             const auto elapsed = now-start;
             if (smokePhase == 1 && elapsed >= std::chrono::milliseconds(300)) {
                 const auto* c = selected(*sim,view);
-                if (c) pushClick(sdl.window,MapX+c->x*Cell+2,MapY+c->y*Cell+2);
+                if (c) {
+                    const MapView map = mapView(*sim);
+                    pushClick(sdl.window,map.x+c->x*map.cell+2,map.y+c->y*map.cell+2);
+                }
                 pushKey(SDLK_TAB); pushKey(SDLK_2); smokePhase = 2;
             } else if (smokePhase == 2 && elapsed >= std::chrono::milliseconds(600)) {
                 smokeSelected = selected(*sim,view) != nullptr;
@@ -678,11 +701,13 @@ int runUi(const UiOptions& options) {
         Simulation reference(draft);
         for (std::uint64_t i = 0; i < sim->tick(); ++i) reference.step();
         const auto expected = static_cast<std::uint64_t>(totalElapsed/FixedTicker::interval);
-        const bool setupEdited = draft.founders == std::clamp(options.config.founders+8,2,PopulationLimit);
+        const bool setupEdited = draft.founders == std::clamp(options.config.founders+8,2,PopulationLimit) &&
+            draft.shape != options.config.shape && draft.worldSize != options.config.worldSize;
         const bool autonomous = reference.digest() == sim->digest();
         const auto& actual = sim->config();
         const bool setupLocked = actual.seed == draft.seed && actual.founders == draft.founders &&
-            actual.fertility == draft.fertility && actual.cooperation == draft.cooperation && actual.hazards == draft.hazards;
+            actual.fertility == draft.fertility && actual.cooperation == draft.cooperation && actual.hazards == draft.hazards &&
+            actual.shape == draft.shape && actual.worldSize == draft.worldSize;
         const bool success = started && setupEdited && smokeSetupFrozen && setupLocked && smokeSelected && smokeLayers && smokeGuide &&
             !view.help && view.layer == 0 && sim->tick() >= 11 && sim->tick() == expected && autonomous;
         std::cout << "UI smoke: " << (success ? "PASS" : "FAIL") << "; ticks=" << sim->tick()

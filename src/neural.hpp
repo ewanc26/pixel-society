@@ -66,6 +66,12 @@ private:
     std::array<float, CoreHiddenThreeCount> cb3_{};
     std::array<std::array<float, CoreHiddenThreeCount>, ActionCount> c4_{};
     std::array<float, ActionCount> cb4_{};
+    // A core is only trained while it is being prepared.  Thereafter it is
+    // shared read-only by every resident, so cache its very expensive
+    // parameter digest instead of walking twelve million floats for every
+    // diagnostic world digest.
+    mutable std::uint64_t cachedDigest_ = 0;
+    mutable bool digestValid_ = false;
 
     struct ForwardPass {
         CoreInput input{};

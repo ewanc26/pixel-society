@@ -277,7 +277,7 @@ void invariants(const Simulation& sim) {
     const auto& s = sim.stats();
     require(s.population >= 0 && s.population <= PopulationLimit, "population bounded");
     require(sim.citizens().size() <= PopulationLimit, "citizen storage bounded across generations");
-    require(sim.tiles().size() == WorldWidth * WorldHeight, "complete world");
+    require(sim.tiles().size() == static_cast<std::size_t>(sim.width() * sim.height()), "complete world");
     require(std::isfinite(s.wellbeing) && s.wellbeing >= 0 && s.wellbeing <= 1, "wellbeing normalized");
     std::set<int> ids;
     int alive = 0;
@@ -285,7 +285,7 @@ void invariants(const Simulation& sim) {
         if (!c.alive) continue;
         ++alive;
         require(ids.insert(c.id).second, "living citizen ids unique");
-        require(c.x >= 0 && c.x < WorldWidth && c.y >= 0 && c.y < WorldHeight, "citizens stay on map");
+        require(c.x >= 0 && c.x < sim.width() && c.y >= 0 && c.y < sim.height(), "citizens stay on map");
         require(sim.tile(c.x, c.y).terrain != Terrain::Water, "citizens cannot walk on water");
         require(std::isfinite(c.health) && c.health > 0 && c.health <= 1, "living health valid");
         require(std::isfinite(c.food) && c.food >= 0 && std::isfinite(c.wood) && c.wood >= 0, "inventories finite nonnegative");
@@ -343,6 +343,13 @@ void extremes() {
     rejects([&] { Simulation sim(config); }, "oversized founders rejected");
     config.founders = 2; config.fertility = std::numeric_limits<float>::quiet_NaN();
     rejects([&] { Simulation sim(config); }, "NaN config rejected");
+    config.fertility = .65f;
+    config.shape = static_cast<WorldShape>(99);
+    rejects([&] { Simulation sim(config); }, "unknown world shape rejected");
+    config.shape = WorldShape::Island;
+    config.worldSize = static_cast<WorldSize>(99);
+    rejects([&] { Simulation sim(config); }, "unknown world size rejected");
+    config.worldSize = WorldSize::Classic;
     config.fertility = 0; config.hazards = 1; config.cooperation = 0;
     Simulation harsh(config);
     for (int i = 0; i < HarshRunTicks; ++i) harsh.step();
@@ -414,17 +421,17 @@ void mechanics() {
 }
 bool territoryBoundary(const Simulation& sim) {
     const auto& tiles = sim.tiles();
-    for (int y = 0; y < WorldHeight; ++y) {
-        for (int x = 0; x < WorldWidth; ++x) {
+    for (int y = 0; y < sim.height(); ++y) {
+        for (int x = 0; x < sim.width(); ++x) {
             const int here = sim.territory(x, y);
-            const int cell = y * WorldWidth + x;
-            if (x + 1 < WorldWidth &&
+            const int cell = y * sim.width() + x;
+            if (x + 1 < sim.width() &&
                 tiles[static_cast<std::size_t>(cell)].terrain != Terrain::Water &&
                 tiles[static_cast<std::size_t>(cell + 1)].terrain != Terrain::Water &&
                 here != sim.territory(x + 1, y)) return true;
-            if (y + 1 < WorldHeight &&
+            if (y + 1 < sim.height() &&
                 tiles[static_cast<std::size_t>(cell)].terrain != Terrain::Rock &&
-                tiles[static_cast<std::size_t>(cell + WorldWidth)].terrain != Terrain::Rock &&
+                tiles[static_cast<std::size_t>(cell + sim.width())].terrain != Terrain::Rock &&
                 here != sim.territory(x, y + 1)) return true;
         }
     }
@@ -434,7 +441,7 @@ void borders() {
     Config config;
     config.seed = 42;
     Simulation a(config), b(config);
-    require(a.territory().size() == static_cast<std::size_t>(WorldWidth * WorldHeight),
+    require(a.territory().size() == static_cast<std::size_t>(a.width() * a.height()),
             "territory labels must cover every tile");
     require(a.territory() == b.territory(), "territory must derive deterministically from the seed");
     std::set<int> clans;
@@ -449,6 +456,54 @@ void borders() {
     int claimed = 0;
     for (int label : a.territory()) if (label >= 0) ++claimed;
     std::cout << "seed42 borders: clans=" << clans.size() << " claimed=" << claimed << '\n';
+}
+void landscapes() {
+    // Every size preset must produce a world of exactly its advertised
+    // dimensions with enough claimable land for all founders to walk on.
+    const WorldSize sizes[] = {WorldSize::Tiny, WorldSize::Small, WorldSize::Classic,
+                               WorldSize::Large, WorldSize::Huge};
+    for (WorldSize size : sizes) {
+        Config config;
+        config.seed = 11;
+        config.worldSize = size;
+        Simulation sim(config);
+        require(sim.width() == worldWidth(size) && sim.height() == worldHeight(size),
+                "world size preset must set the advertised dimensions");
+        require(sim.tiles().size() == static_cast<std::size_t>(sim.width() * sim.height()),
+                "tile storage must match the chosen world dimensions");
+        int land = 0;
+        for (const auto& tile : sim.tiles())
+            if (tile.terrain != Terrain::Water) ++land;
+        require(land > sim.width() * sim.height() / 4,
+                "every world size must open enough land for a settlement");
+    }
+    // Every shape must be a genuine familiar landscape: not pure water, not
+    // uniform plain, and deterministic from its seed.
+    const WorldShape shapes[] = {WorldShape::Island, WorldShape::Archipelago, WorldShape::InlandSea,
+                                 WorldShape::Highlands, WorldShape::Riverlands};
+    for (WorldShape shape : shapes) {
+        Config a, b;
+        a.seed = 11; a.shape = shape;
+        b.seed = 11; b.shape = shape;
+        Simulation first(a), second(b);
+        require(first.digest() == second.digest(), "every shape must reproduce from its seed");
+        int land = 0, forest = 0, rock = 0;
+        for (const auto& tile : first.tiles()) {
+            if (tile.terrain != Terrain::Water) ++land;
+            if (tile.terrain == Terrain::Forest) ++forest;
+            if (tile.terrain == Terrain::Rock) ++rock;
+        }
+        const int total = first.width() * first.height();
+        require(land >= total / 8 && land <= total * 19 / 20, "shape must leave a meaningful coastline");
+        if (shape == WorldShape::Highlands) {
+            require(forest < total / 3, "highlands must thin the forest across rocky ground");
+            require(rock > total / 64, "highlands must raise rocky ridgelines");
+        } else {
+            require(forest > 0, "wooded land must exist for the age of timber");
+        }
+        if (shape == WorldShape::Archipelago || shape == WorldShape::InlandSea)
+            require(land < total * 3 / 4, "seascapes must scatter land through open water");
+    }
 }
 void threadDeterminism() {
     Config config;
@@ -472,6 +527,7 @@ int main() {
         observations(); std::cout << "PASS 82-feature individual and environmental observations\n";
         society(); std::cout << "PASS autonomous society, event ranks, determinism\n";
         borders(); std::cout << "PASS deterministic civilisation territory borders\n";
+        landscapes(); std::cout << "PASS world shape and size presets\n";
         mechanics(); std::cout << "PASS disease, fire succession and cultural mechanics\n";
         threadDeterminism(); std::cout << "PASS deterministic multithreaded simulation\n";
         extremes(); std::cout << "PASS invalid and extreme configurations\n";

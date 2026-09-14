@@ -41,6 +41,21 @@ constants, five groups covering the ordered observation contract, and a live
 finite/normalized sensor count. Its SDL smoke scenario verifies that this
 inspector, selection, layers and guide remain observation-only after start.
 
+## Landscape and scale checks
+
+The setup surface and headless runner expose five deterministic terrain shapes:
+Island, Archipelago, Inland Sea, Highlands and Riverlands. Each can run at Tiny
+(48 × 32), Small (64 × 40), Classic (96 × 64), Large (128 × 80) or Huge
+(192 × 128) scale. The core suite creates every size and verifies that tile
+storage, bounds and usable land match the advertised dimensions. It also builds
+each terrain shape twice from the same seed, requires matching digests, and
+checks its coastline and terrain makeup. Highlands must contain rocky ridges;
+seascapes must leave meaningful open water.
+
+The desktop smoke flow changes founders, terrain shape and world size before it
+starts the experiment. It then verifies that the resulting draft is frozen and
+that the observer still preserves an unattended reference world's digest.
+
 Run the full current verification after changes with:
 
 ```sh
@@ -66,7 +81,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 
-5 / 5 tests passed in 66.11 seconds
+5 / 5 tests passed in 62.77 seconds
 ```
 
 Those tests cover neural inference and backpropagation, the ten-million-plus
@@ -75,8 +90,8 @@ advice-channel sensitivity, action masking, mutation/inheritance and social
 imitation, the fixed 200 ms clock and catch-up debt, seeded determinism,
 worker-count invariance, the emergent disease/fire/transmission mechanics,
 deterministic civilisation territory and its visible borders, autonomous
-construction and reproduction, score bounds, world invariants, invalid input
-and the SDL observer flow.
+construction and reproduction, every terrain shape and world-size preset,
+score bounds, world invariants, invalid input and the SDL observer flow.
 
 The instrumented core build also completed:
 
@@ -86,7 +101,7 @@ cmake -S . -B build-sanitize -DPIXEL_SOCIETY_GUI=OFF \
 cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 
-4 / 4 tests passed in 95.83 seconds
+4 / 4 tests passed in 95.70 seconds
 ```
 
 The sanitizer configuration keeps the same test categories but uses a shorter
@@ -105,7 +120,7 @@ observer:
 ```
 
 It represents 1,200 simulated seconds (20 game days). On the release build it
-finished on this machine in 23.26 seconds wall-clock with ten worker threads,
+finished on this machine in 22.185 seconds wall-clock with ten worker threads,
 256 citizens, 306 births, 98 deaths, generation 5, 92.39% wellbeing, 1,353,682
 neural decisions and 1,353,688 learning updates, and a civilization seed-42
 society core of 12,002,316 parameters. Every one of the twelve intentions had a
@@ -116,7 +131,7 @@ volume above the earlier snapshot while the society keeps reproducing under
 the added disease pressure.
 
 Two independent runs with those same settings produced the same deterministic
-world digest: `2171052458119317984`. The digest is independent of the worker
+world digest: `14770410760975234110`. The digest is independent of the worker
 pool as well as of wall-clock time: the same world run with one, ten or 256
 threads reported the identical digest. The territory labels now contribute to
 the digest (and therefore shift it from the mechanics-only snapshot), while
@@ -124,16 +139,26 @@ the population statistics remain unchanged because the claim map is derived
 for display only. Because each civilization trains its own core from its world
 seed, this snapshot's digest and population statistics differ from the earlier
 shared-core release: the seed-42 civilization's core and the world it spawns
-are part of a single deterministic seed contract.
+are part of a single deterministic seed contract. The selected landscape shape
+and size are also part of that contract.
+
+## Expanded-world spot check
+
+The headless runner also completed 300 ticks of a Huge (192 × 128)
+Archipelago at four workers in 0.838 seconds wall-clock. The resulting society
+held 94 residents, had 215 homes and 175 farms, and reported the same
+12,002,316 core parameters as the Classic world. This is an evidence point for
+the larger map path rather than a claim that every terrain/size/seed combination
+will thrive equally.
 
 ## Native observer check
 
-The native SDL smoke check ran the setup interaction, started the simulation,
-selected a citizen, changed every observation layer, opened and closed the
-guide, and tried setup keys after the world was live. It passed at 11 ticks with
-an expected 11 ticks at five per second. It confirmed that the setup stays
-frozen before start and that observer input preserves a same-tick reference
-world digest.
+The native SDL smoke check changed founders, terrain shape and world size in
+setup, started the simulation, selected a citizen, changed every observation
+layer, opened and closed the guide, and tried setup keys after the world was
+live. It passed at 11 ticks with an expected 11 ticks at five per second. It
+confirmed that the setup stays frozen before start and that observer input
+preserves a same-tick reference world digest.
 
 ```sh
 ./build/pixel-society --smoke-test --screenshot build/observatory.bmp

@@ -11,15 +11,12 @@
 
 namespace pixels {
 namespace {
-constexpr int Area = WorldWidth * WorldHeight;
 constexpr int Directions[4][2] = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};
 constexpr std::size_t EventLimit = 8192;
 constexpr std::size_t HistoryLimit = 600;
 constexpr int ClanCount = 4;
 static_assert(InputCount == 82, "Simulation observation producer follows the 82-feature contract");
 float unit(float value) { return std::clamp(value, 0.0f, 1.0f); }
-int indexOf(int x, int y) { return y * WorldWidth + x; }
-bool inBounds(int x, int y) { return x >= 0 && y >= 0 && x < WorldWidth && y < WorldHeight; }
 float randomUnit(std::mt19937& random) {
     // Using raw engine bits also avoids implementation-specific real distributions.
     return static_cast<float>(random() >> 8) / 16777216.0f;
@@ -40,12 +37,18 @@ bool birthReady(const Citizen& citizen, const Config& config) {
 }
 }
 
-Simulation::Simulation(Config config) : config_(config), rng_(config.seed), tiles_(Area) {
+Simulation::Simulation(Config config) : config_(config), rng_(config.seed),
+    width_(worldWidth(config.worldSize)), height_(worldHeight(config.worldSize)),
+    tiles_(width_ * height_) {
+    const int shape = static_cast<int>(config.shape);
+    const int size = static_cast<int>(config.worldSize);
     if (config.founders < 2 || config.founders > PopulationLimit ||
         !std::isfinite(config.fertility) || config.fertility < 0 || config.fertility > 1 ||
         !std::isfinite(config.cooperation) || config.cooperation < 0 || config.cooperation > 1 ||
-        !std::isfinite(config.hazards) || config.hazards < 0 || config.hazards > 1) {
-        throw std::invalid_argument("Founders must be 2..256 and fertility, cooperation, hazards must be finite values in [0,1]");
+        !std::isfinite(config.hazards) || config.hazards < 0 || config.hazards > 1 ||
+        shape < static_cast<int>(WorldShape::Island) || shape > static_cast<int>(WorldShape::Riverlands) ||
+        size < static_cast<int>(WorldSize::Tiny) || size > static_cast<int>(WorldSize::Huge)) {
+        throw std::invalid_argument("Founders must be 2..256; rates must be finite values in [0,1]; world shape and size must be recognized presets");
     }
     // Configure the process-wide worker pool first so world generation and core
     // training below already run with the requested level of parallelism. The
@@ -54,8 +57,8 @@ Simulation::Simulation(Config config) : config_(config), rng_(config.seed), tile
     core_ = makeSocietyCore(config.seed);
     citizens_.reserve(PopulationLimit);
     for (int kind = 0; kind < 5; ++kind) {
-        destinations_[kind].resize(Area, -1);
-        distances_[kind].resize(Area, Area);
+        destinations_[kind].resize(area(), -1);
+        distances_[kind].resize(area(), area());
     }
     generate();
     rebuildDestinations();
@@ -81,40 +84,24 @@ bool Simulation::walkable(int x, int y) const {
 
 void Simulation::generate() {
     const float phase = randomUnit(rng_) * 6.2831853f;
-    for (int y = 0; y < WorldHeight; ++y) {
-        const float river = WorldWidth * .48f + 8 * std::sin(y * .12f + phase);
-        for (int x = 0; x < WorldWidth; ++x) {
-            Tile& ground = tiles_[indexOf(x, y)];
-            const float n = randomUnit(rng_);
-            const float wetness = std::abs(x - river);
-            const float lakeA = std::pow((x - 17.0f) / 7.0f, 2) + std::pow((y - 16.0f) / 5.0f, 2);
-            const float lakeB = std::pow((x - 78.0f) / 7.0f, 2) + std::pow((y - 48.0f) / 5.0f, 2);
-            if (wetness < 1.35f || lakeA < 1 || lakeB < 1) {
-                ground.terrain = Terrain::Water;
-                continue;
-            }
-            ground.fertility = unit(.3f + .55f * config_.fertility + .2f * randomUnit(rng_) - .005f * wetness);
-            if (wetness < 2.6f || lakeA < 1.35f || lakeB < 1.35f) ground.terrain = Terrain::Sand;
-            else if (n < .025f) ground.terrain = Terrain::Rock;
-            else if (n < .34f) ground.terrain = Terrain::Forest;
-            else ground.terrain = Terrain::Grass;
-            if (ground.terrain != Terrain::Rock) {
-                ground.food = ground.fertility * (1.0f + 2.0f * randomUnit(rng_));
-                ground.wood = ground.terrain == Terrain::Forest ? 2.5f + 2.5f * randomUnit(rng_) : 0;
-            }
-        }
+    switch (config_.shape) {
+    case WorldShape::Island: generateIsland(phase); break;
+    case WorldShape::Archipelago: generateArchipelago(phase); break;
+    case WorldShape::InlandSea: generateInlandSea(phase); break;
+    case WorldShape::Highlands: generateHighlands(phase); break;
+    case WorldShape::Riverlands: generateRiverlands(phase); break;
     }
-    landComponents_.assign(Area, -1);
+    landComponents_.assign(area(), -1);
     int component = 0;
-    for (int start = 0; start < Area; ++start) {
-        if (!walkable(start % WorldWidth, start / WorldWidth) || landComponents_[start] >= 0) continue;
-        std::array<int, Area> queue{};
+    std::vector<int> queue(area(), 0);
+    for (int start = 0; start < area(); ++start) {
+        if (!walkable(start % width_, start / width_) || landComponents_[start] >= 0) continue;
         int read = 0, write = 0;
         queue[write++] = start; landComponents_[start] = component;
         while (read < write) {
             const int cell = queue[read++];
             for (const auto& direction : Directions) {
-                const int nx = cell % WorldWidth + direction[0], ny = cell / WorldWidth + direction[1];
+                const int nx = cell % width_ + direction[0], ny = cell / width_ + direction[1];
                 if (!walkable(nx, ny)) continue;
                 const int next = indexOf(nx, ny);
                 if (landComponents_[next] >= 0) continue;
@@ -124,8 +111,17 @@ void Simulation::generate() {
         }
         ++component;
     }
+    std::array<std::pair<int, int>, ClanCount> camps{};
+    if (config_.worldSize == WorldSize::Classic) {
+        camps = {{{30, 22}, {63, 24}, {24, 43}, {70, 43}}};
+    } else {
+        const std::array<std::pair<float, float>, ClanCount> fraction = {{
+            {.3125f, .34375f}, {.65625f, .375f}, {.25f, .671875f}, {.72917f, .671875f}}};
+        for (int k = 0; k < ClanCount; ++k)
+            camps[static_cast<std::size_t>(k)] = {static_cast<int>(fraction[static_cast<std::size_t>(k)].first * width_),
+                                                  static_cast<int>(fraction[static_cast<std::size_t>(k)].second * height_)};
+    }
     const Brain founderPolicy = makeFounderBrain(config_.seed, *core_);
-    const std::array<std::pair<int, int>, ClanCount> camps = {{{30, 22}, {63, 24}, {24, 43}, {70, 43}}};
     for (int i = 0; i < config_.founders; ++i) {
         Citizen citizen;
         citizen.id = nextId_++;
@@ -141,15 +137,15 @@ void Simulation::generate() {
         citizen.wood = randomUnit(rng_) * 2;
         auto camp = camps[static_cast<std::size_t>(citizen.clan)];
         bool placed = false;
-        for (int trial = 0; trial < Area && !placed; ++trial) {
-            citizen.x = std::clamp(camp.first + static_cast<int>(rng_() % 15) - 7, 0, WorldWidth - 1);
-            citizen.y = std::clamp(camp.second + static_cast<int>(rng_() % 15) - 7, 0, WorldHeight - 1);
+        for (int trial = 0; trial < area() && !placed; ++trial) {
+            citizen.x = std::clamp(camp.first + static_cast<int>(rng_() % 15) - 7, 0, width_ - 1);
+            citizen.y = std::clamp(camp.second + static_cast<int>(rng_() % 15) - 7, 0, height_ - 1);
             placed = walkable(citizen.x, citizen.y);
         }
         if (!placed) {
-            for (int cell = 0; cell < Area; ++cell) {
-                if (walkable(cell % WorldWidth, cell / WorldWidth)) {
-                    citizen.x = cell % WorldWidth; citizen.y = cell / WorldWidth; break;
+            for (int cell = 0; cell < area(); ++cell) {
+                if (walkable(cell % width_, cell / width_)) {
+                    citizen.x = cell % width_; citizen.y = cell / width_; break;
                 }
             }
         }
@@ -158,6 +154,185 @@ void Simulation::generate() {
         citizens_.push_back(std::move(citizen));
     }
     emit("founding", std::to_string(config_.founders) + " founders enter an unbuilt world", .65f);
+}
+
+// Per-tile rule shared by every terrain shape: sand by the shore, a sprinkle of
+// rock, forest pockets, and the rest open ground. Every tile draws its base
+// random before this, so the deterministic rng schedule is shape-independent.
+void Simulation::classifyLand(int x, int y, float n, float shore) {
+    Tile& ground = tiles_[indexOf(x, y)];
+    ground.fertility = unit(.3f + .55f * config_.fertility + .2f * randomUnit(rng_) - .005f * shore);
+    if (shore < 2.6f) ground.terrain = Terrain::Sand;
+    else if (n < .025f) ground.terrain = Terrain::Rock;
+    else if (n < .34f) ground.terrain = Terrain::Forest;
+    else ground.terrain = Terrain::Grass;
+    if (ground.terrain != Terrain::Rock) {
+        ground.food = ground.fertility * (1.0f + 2.0f * randomUnit(rng_));
+        ground.wood = ground.terrain == Terrain::Forest ? 2.5f + 2.5f * randomUnit(rng_) : 0;
+    }
+}
+
+void Simulation::generateIsland(float phase) {
+    if (config_.worldSize == WorldSize::Classic) {
+        // The classic 96 x 64 single continent, using compile-time dimensions so
+        // the compiler folds the bound checks and river arithmetic exactly as the
+        // historical generator did, keeping the canonical seed and digest intact.
+        constexpr int W = DefaultWorldWidth, H = DefaultWorldHeight;
+        for (int y = 0; y < H; ++y) {
+            const float river = W * .48f + 8 * std::sin(y * .12f + phase);
+            for (int x = 0; x < W; ++x) {
+                Tile& ground = tiles_[indexOf(x, y)];
+                const float n = randomUnit(rng_);
+                const float wetness = std::abs(x - river);
+                const float lakeA = std::pow((x - 17.0f) / 7.0f, 2) + std::pow((y - 16.0f) / 5.0f, 2);
+                const float lakeB = std::pow((x - 78.0f) / 7.0f, 2) + std::pow((y - 48.0f) / 5.0f, 2);
+                if (wetness < 1.35f || lakeA < 1 || lakeB < 1) {
+                    ground.terrain = Terrain::Water;
+                    continue;
+                }
+                ground.fertility = unit(.3f + .55f * config_.fertility + .2f * randomUnit(rng_) - .005f * wetness);
+                if (wetness < 2.6f || lakeA < 1.35f || lakeB < 1.35f) ground.terrain = Terrain::Sand;
+                else if (n < .025f) ground.terrain = Terrain::Rock;
+                else if (n < .34f) ground.terrain = Terrain::Forest;
+                else ground.terrain = Terrain::Grass;
+                if (ground.terrain != Terrain::Rock) {
+                    ground.food = ground.fertility * (1.0f + 2.0f * randomUnit(rng_));
+                    ground.wood = ground.terrain == Terrain::Forest ? 2.5f + 2.5f * randomUnit(rng_) : 0;
+                }
+            }
+        }
+    } else {
+        for (int y = 0; y < height_; ++y) {
+            const float river = width_ * .48f + 8 * std::sin(y * .12f + phase);
+            for (int x = 0; x < width_; ++x) {
+                Tile& ground = tiles_[indexOf(x, y)];
+                const float n = randomUnit(rng_);
+                const float wetness = std::abs(x - river);
+                const float lakeA = std::pow((x - 17.0f) / 7.0f, 2) + std::pow((y - 16.0f) / 5.0f, 2);
+                const float lakeB = std::pow((x - 78.0f) / 7.0f, 2) + std::pow((y - 48.0f) / 5.0f, 2);
+                if (wetness < 1.35f || lakeA < 1 || lakeB < 1) {
+                    ground.terrain = Terrain::Water;
+                    continue;
+                }
+                ground.fertility = unit(.3f + .55f * config_.fertility + .2f * randomUnit(rng_) - .005f * wetness);
+                if (wetness < 2.6f || lakeA < 1.35f || lakeB < 1.35f) ground.terrain = Terrain::Sand;
+                else if (n < .025f) ground.terrain = Terrain::Rock;
+                else if (n < .34f) ground.terrain = Terrain::Forest;
+                else ground.terrain = Terrain::Grass;
+                if (ground.terrain != Terrain::Rock) {
+                    ground.food = ground.fertility * (1.0f + 2.0f * randomUnit(rng_));
+                    ground.wood = ground.terrain == Terrain::Forest ? 2.5f + 2.5f * randomUnit(rng_) : 0;
+                }
+            }
+        }
+    }
+}
+
+void Simulation::generateArchipelago(float phase) {
+    const int islands = 6 + static_cast<int>(randomUnit(rng_) * 5);
+    float cx[10] = {}, cy[10] = {}, a[10] = {}, b[10] = {};
+    for (int i = 0; i < islands; ++i) {
+        cx[i] = (.08f + .84f * randomUnit(rng_)) * width_;
+        cy[i] = (.10f + .80f * randomUnit(rng_)) * height_;
+        a[i] = (.06f + .10f * randomUnit(rng_)) * width_;
+        b[i] = (.08f + .12f * randomUnit(rng_)) * height_;
+    }
+    for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+            const float n = randomUnit(rng_);
+            float nearest = 1e9f;
+            for (int i = 0; i < islands; ++i) {
+                const float dx = (x - cx[i]) / (a[i] + 2.0f * std::sin(y * .07f + phase)),
+                            dy = (y - cy[i]) / b[i];
+                nearest = std::min(nearest, dx * dx + dy * dy);
+            }
+            if (nearest >= 1.18f) { tiles_[indexOf(x, y)].terrain = Terrain::Water; continue; }
+            // Distance to the island's shore, not its centre, grows inland:
+            // a sandy fringe with feedable ground and timber beyond it.
+            classifyLand(x, y, n, (1.18f - std::sqrt(nearest)) * 14.0f);
+        }
+    }
+}
+
+void Simulation::generateInlandSea(float /*phase*/) {
+    // A ring of coastal land around one great interior ocean, with a few
+    // refuge islands out in the deep water.
+    const float seaW = std::max(8.0f, width_ * .68f);
+    const float seaH = std::max(8.0f, height_ * .62f);
+    const int islets = 3;
+    float ix[3] = {}, iy[3] = {}, ia[3] = {}, ib[3] = {};
+    for (int i = 0; i < islets; ++i) {
+        ix[i] = (.3f + .4f * randomUnit(rng_)) * width_;
+        iy[i] = (.3f + .4f * randomUnit(rng_)) * height_;
+        ia[i] = (.05f + .05f * randomUnit(rng_)) * width_;
+        ib[i] = (.06f + .06f * randomUnit(rng_)) * height_;
+    }
+    for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+            const float n = randomUnit(rng_);
+            const float edge = static_cast<float>(std::min(std::min(x, width_ - 1 - x),
+                                                           std::min(y, height_ - 1 - y)));
+            const float sea = std::pow((x - width_ * .5f) / (seaW * .5f), 2) +
+                              std::pow((y - height_ * .5f) / (seaH * .5f), 2);
+            bool islet = false;
+            for (int i = 0; i < islets; ++i) {
+                const float dx = (x - ix[i]) / ia[i], dy = (y - iy[i]) / ib[i];
+                if (dx * dx + dy * dy < .75f) islet = true;
+            }
+            if (sea < .95f && !islet) { tiles_[indexOf(x, y)].terrain = Terrain::Water; continue; }
+            // Coastlines face both ways: the map border and the inner sea.
+            const float coast = std::min(static_cast<float>(edge),
+                                         std::max(0.0f, std::sqrt(sea) - 1.0f) * 30.0f);
+            classifyLand(x, y, n, coast);
+        }
+    }
+}
+
+void Simulation::generateHighlands(float phase) {
+    // Continental island with rocky ridgelines and thin, scarce forest cover.
+    const float ridgePhase = randomUnit(rng_) * 6.2831853f;
+    for (int y = 0; y < height_; ++y) {
+        const float river = width_ * .48f + 8 * std::sin(y * .12f + phase);
+        for (int x = 0; x < width_; ++x) {
+            const float n = randomUnit(rng_);
+            const float wetness = std::abs(x - river);
+            const float lakeA = std::pow((x - 17.0f) / 7.0f, 2) + std::pow((y - 16.0f) / 5.0f, 2);
+            const float lakeB = std::pow((x - 78.0f) / 7.0f, 2) + std::pow((y - 48.0f) / 5.0f, 2);
+            if (wetness < 1.35f || lakeA < 1 || lakeB < 1) {
+                tiles_[indexOf(x, y)].terrain = Terrain::Water;
+                continue;
+            }
+            const float ridge = .5f + .5f * std::sin(x * .09f + y * .13f + ridgePhase) +
+                                .5f * std::sin(x * .045f - y * .07f);
+            classifyLand(x, y, n, wetness);
+            if (wetness >= 2.6f && (ridge > 1.32f || n < .06f)) {
+                tiles_[indexOf(x, y)].terrain = Terrain::Rock;
+                tiles_[indexOf(x, y)].food = 0;
+                tiles_[indexOf(x, y)].wood = 0;
+            }
+        }
+    }
+}
+
+void Simulation::generateRiverlands(float phase) {
+    const int rivers = 3 + static_cast<int>(randomUnit(rng_) * 2);
+    float base[4] = {}, amp[4] = {}, omega[4] = {}, shift[4] = {};
+    for (int i = 0; i < rivers; ++i) {
+        base[i] = (.12f + .76f * randomUnit(rng_)) * width_;
+        amp[i] = 6.0f + 8.0f * randomUnit(rng_);
+        omega[i] = .10f + randomUnit(rng_) * .08f;
+        shift[i] = randomUnit(rng_) * 6.2831853f;
+    }
+    for (int y = 0; y < height_; ++y) {
+        for (int x = 0; x < width_; ++x) {
+            const float n = randomUnit(rng_);
+            float nearest = 1e9f;
+            for (int i = 0; i < rivers; ++i)
+                nearest = std::min(nearest, std::abs(x - (base[i] + amp[i] * std::sin(y * omega[i] + shift[i] + phase))));
+            if (nearest < 1.6f) { tiles_[indexOf(x, y)].terrain = Terrain::Water; continue; }
+            classifyLand(x, y, n, nearest);
+        }
+    }
 }
 
 void Simulation::rebuildDestinations() {
@@ -169,12 +344,12 @@ void Simulation::rebuildDestinations() {
             auto& destinations = destinations_[kind];
             auto& distances = distances_[kind];
             std::fill(destinations.begin(), destinations.end(), -1);
-            std::fill(distances.begin(), distances.end(), Area);
-            std::array<int, Area> queue{};
+            std::fill(distances.begin(), distances.end(), area());
+            std::vector<int> queue(area(), 0);
             int read = 0, write = 0;
-            for (int i = 0; i < Area; ++i) {
+            for (int i = 0; i < area(); ++i) {
                 const Tile& ground = tiles_[i];
-                if (!walkable(i % WorldWidth, i / WorldWidth)) continue;
+                if (!walkable(i % width_, i / width_)) continue;
                 bool source = (kind == 0 && ground.food >= .2f) ||
                               (kind == 2 && ground.wood >= .2f) ||
                               (kind == 3 && ground.structure == Structure::Home) ||
@@ -182,7 +357,7 @@ void Simulation::rebuildDestinations() {
                 int target = i;
                 if (kind == 1) {
                     for (const auto& direction : Directions) {
-                        const int nx = i % WorldWidth + direction[0], ny = i / WorldWidth + direction[1];
+                        const int nx = i % width_ + direction[0], ny = i / width_ + direction[1];
                         if (inBounds(nx, ny) && tiles_[indexOf(nx, ny)].terrain == Terrain::Water) {
                             target = indexOf(nx, ny); source = true; break;
                         }
@@ -197,7 +372,7 @@ void Simulation::rebuildDestinations() {
             while (read < write) {
                 const int cell = queue[read++];
                 for (const auto& direction : Directions) {
-                    const int nx = cell % WorldWidth + direction[0], ny = cell / WorldWidth + direction[1];
+                    const int nx = cell % width_ + direction[0], ny = cell / width_ + direction[1];
                     if (!walkable(nx, ny)) continue;
                     const int next = indexOf(nx, ny);
                     if (destinations[next] >= 0) continue;
@@ -215,9 +390,9 @@ void Simulation::computeTerritory() {
     // civilisation whose nearest owned home, farm or resident wins the ground.
     // Water and rock are never claimed. Ties go to the lower clan index, so
     // the border lines the observer draws are stable for any given world.
-    territory_.assign(Area, -1);
+    territory_.assign(area(), -1);
     constexpr float MaxDistance = std::numeric_limits<float>::max();
-    std::vector<float> reach(Area, MaxDistance);
+    std::vector<float> reach(area(), MaxDistance);
     using Entry = std::pair<float, int>;
     std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> frontier;
     auto seed = [&](int tile, int clan, float cost) {
@@ -227,7 +402,7 @@ void Simulation::computeTerritory() {
             frontier.push({cost, tile});
         }
     };
-    for (int i = 0; i < Area; ++i) {
+    for (int i = 0; i < area(); ++i) {
         const Tile& ground = tiles_[i];
         if (ground.structure != Structure::None && ground.owner >= 0)
             seed(i, ground.owner, 0.0f);
@@ -239,7 +414,7 @@ void Simulation::computeTerritory() {
         const float cost = current.first;
         const int tile = current.second;
         if (cost > reach[tile]) continue;
-        const int x = tile % WorldWidth, y = tile / WorldWidth;
+        const int x = tile % width_, y = tile / width_;
         for (const auto& direction : Directions) {
             const int nx = x + direction[0], ny = y + direction[1];
             if (!inBounds(nx, ny)) continue;
@@ -306,7 +481,7 @@ Observation Simulation::observe(const Citizen& citizen) const {
         for (int kind = 0; kind < 5; ++kind) {
             if (destinations_[kind][cell] >= 0) state[10 + kind] = 1.0f / (1 + distances_[kind][cell]);
         }
-        closest = nearest(citizen.x, citizen.y, 5, WorldWidth + WorldHeight, citizen.id);
+        closest = nearest(citizen.x, citizen.y, 5, width_ + height_, citizen.id);
         if (closest >= 0) state[15] = 1.0f / (1 + distance(citizen.x, citizen.y, citizens_[closest].x, citizens_[closest].y));
         state[16] = tiles_[cell].fire;
         state[19] = tiles_[cell].fertility;
@@ -360,9 +535,9 @@ Observation Simulation::observe(const Citizen& citizen) const {
         auto summarize = [&](int radius) {
             Neighborhood summary;
             const int minX = std::max(0, citizen.x - radius);
-            const int maxX = std::min(WorldWidth - 1, citizen.x + radius);
+            const int maxX = std::min(width_ - 1, citizen.x + radius);
             const int minY = std::max(0, citizen.y - radius);
-            const int maxY = std::min(WorldHeight - 1, citizen.y + radius);
+            const int maxY = std::min(height_ - 1, citizen.y + radius);
             int tiles = 0;
             for (int y = minY; y <= maxY; ++y) {
                 for (int x = minX; x <= maxX; ++x) {
@@ -450,8 +625,8 @@ Observation Simulation::observe(const Citizen& citizen) const {
             state[67] = 1.0f - neighbour.social;
         }
         const int component = landComponents_[cell];
-        int sameClanDistance = Area;
-        int differentClanDistance = Area;
+        int sameClanDistance = area();
+        int differentClanDistance = area();
         for (const Citizen& neighbour : citizens_) {
             if (!neighbour.alive || neighbour.id == citizen.id ||
                 landComponents_[indexOf(neighbour.x, neighbour.y)] != component) continue;
@@ -459,8 +634,8 @@ Observation Simulation::observe(const Citizen& citizen) const {
             if (neighbour.clan == citizen.clan) sameClanDistance = std::min(sameClanDistance, separation);
             else differentClanDistance = std::min(differentClanDistance, separation);
         }
-        if (sameClanDistance < Area) state[68] = 1.0f / (1.0f + static_cast<float>(sameClanDistance));
-        if (differentClanDistance < Area) state[69] = 1.0f / (1.0f + static_cast<float>(differentClanDistance));
+        if (sameClanDistance < area()) state[68] = 1.0f / (1.0f + static_cast<float>(sameClanDistance));
+        if (differentClanDistance < area()) state[69] = 1.0f / (1.0f + static_cast<float>(differentClanDistance));
     }
 
     // [70,81] encode the action selected on the prior decision. At the start
@@ -517,13 +692,13 @@ ActionMask Simulation::legalActions(const Citizen& citizen) const {
     const int other = nearest(citizen.x, citizen.y, 5, 24, citizen.id);
     const int site = nearest(citizen.x, citizen.y, 6, 4);
     legal[static_cast<int>(Action::Wander)] = true;
-    legal[static_cast<int>(Action::Gather)] = citizen.food < 10 && nearest(citizen.x, citizen.y, 0, Area) >= 0;
+    legal[static_cast<int>(Action::Gather)] = citizen.food < 10 && nearest(citizen.x, citizen.y, 0, area()) >= 0;
     legal[static_cast<int>(Action::Eat)] = citizen.food >= .25f;
-    legal[static_cast<int>(Action::Drink)] = nearest(citizen.x, citizen.y, 1, Area) >= 0;
+    legal[static_cast<int>(Action::Drink)] = nearest(citizen.x, citizen.y, 1, area()) >= 0;
     legal[static_cast<int>(Action::Rest)] = true;
-    legal[static_cast<int>(Action::Chop)] = citizen.wood < 10 && nearest(citizen.x, citizen.y, 2, Area) >= 0;
+    legal[static_cast<int>(Action::Chop)] = citizen.wood < 10 && nearest(citizen.x, citizen.y, 2, area()) >= 0;
     legal[static_cast<int>(Action::Build)] = citizen.wood >= 4 && site >= 0;
-    legal[static_cast<int>(Action::Farm)] = nearest(citizen.x, citizen.y, 4, Area) >= 0 || (citizen.wood >= 1 && site >= 0);
+    legal[static_cast<int>(Action::Farm)] = nearest(citizen.x, citizen.y, 4, area()) >= 0 || (citizen.wood >= 1 && site >= 0);
     legal[static_cast<int>(Action::Share)] = citizen.food > .5f && other >= 0;
     legal[static_cast<int>(Action::Socialize)] = other >= 0;
     legal[static_cast<int>(Action::Reproduce)] = birthReady(citizen, config_) && nearest(citizen.x, citizen.y, 7, 24, citizen.id) >= 0 &&
@@ -533,12 +708,12 @@ ActionMask Simulation::legalActions(const Citizen& citizen) const {
 }
 
 bool Simulation::moveToward(Citizen& citizen, int target) {
-    if (target < 0 || target >= Area) return false;
+    if (target < 0 || target >= area()) return false;
     const int start = indexOf(citizen.x, citizen.y);
-    const int tx = target % WorldWidth, ty = target / WorldWidth;
+    const int tx = target % width_, ty = target / width_;
     const bool exact = walkable(tx, ty);
     auto reached = [&](int cell) {
-        return exact ? cell == target : distance(cell % WorldWidth, cell / WorldWidth, tx, ty) == 1;
+        return exact ? cell == target : distance(cell % width_, cell / width_, tx, ty) == 1;
     };
     if (reached(start)) return false;
     // Social and construction targets are nearby. A deterministic local step
@@ -558,7 +733,7 @@ bool Simulation::moveToward(Citizen& citizen, int target) {
         }
     }
     if (next < 0) return false;
-    citizen.x = next % WorldWidth; citizen.y = next / WorldWidth;
+    citizen.x = next % width_; citizen.y = next / width_;
     tiles_[next].traffic = unit(tiles_[next].traffic + .045f);
     citizen.energy = unit(citizen.energy - .0015f);
     return true;
@@ -568,7 +743,7 @@ bool Simulation::moveAlongField(Citizen& citizen, int kind) {
     if (kind < 0 || kind >= 5) return false;
     const int start = indexOf(citizen.x, citizen.y);
     const auto& distances = distances_[kind];
-    if (distances[start] >= Area) return false;
+    if (distances[start] >= area()) return false;
     int next = -1;
     int best = distances[start];
     // The multi-source breadth-first field was rebuilt before the citizens
@@ -585,8 +760,8 @@ bool Simulation::moveAlongField(Citizen& citizen, int kind) {
         }
     }
     if (next < 0) return false;
-    citizen.x = next % WorldWidth;
-    citizen.y = next / WorldWidth;
+    citizen.x = next % width_;
+    citizen.y = next / width_;
     tiles_[next].traffic = unit(tiles_[next].traffic + .045f);
     citizen.energy = unit(citizen.energy - .0015f);
     return true;
@@ -618,7 +793,7 @@ float Simulation::act(Citizen& citizen, Action action) {
         return -.02f;
     }
     case Action::Gather: {
-        const int target = nearest(citizen.x, citizen.y, 0, Area);
+        const int target = nearest(citizen.x, citizen.y, 0, area());
         if (target != cell) return moveAlongField(citizen, 0) ? .015f : -.015f;
         const float amount = std::min({2.0f, ground.food, 10 - citizen.food});
         const float demand = .15f + .65f * (1 - citizen.food / 10) + .2f * citizen.hunger;
@@ -632,9 +807,9 @@ float Simulation::act(Citizen& citizen, Action action) {
         return .9f * (before - citizen.hunger) - .025f * consumed;
     }
     case Action::Drink: {
-        const int target = nearest(citizen.x, citizen.y, 1, Area);
+        const int target = nearest(citizen.x, citizen.y, 1, area());
         if (target < 0) return -.05f;
-        if (distance(citizen.x, citizen.y, target % WorldWidth, target / WorldWidth) > 1)
+        if (distance(citizen.x, citizen.y, target % width_, target / width_) > 1)
             return moveAlongField(citizen, 1) ? .015f : -.015f;
         const float before = citizen.thirst;
         citizen.thirst = unit(citizen.thirst - .7f);
@@ -648,7 +823,7 @@ float Simulation::act(Citizen& citizen, Action action) {
         return .75f * (citizen.energy - before) - .008f;
     }
     case Action::Chop: {
-        const int target = nearest(citizen.x, citizen.y, 2, Area);
+        const int target = nearest(citizen.x, citizen.y, 2, area());
         if (target != cell) return moveAlongField(citizen, 2) ? .015f : -.015f;
         const float demand = 1 - citizen.wood / 10;
         const float amount = std::min({1.5f, ground.wood, 10 - citizen.wood});
@@ -672,8 +847,8 @@ float Simulation::act(Citizen& citizen, Action action) {
         return .90f * need - .25f;
     }
     case Action::Farm: {
-        const int target = nearest(citizen.x, citizen.y, 4, Area);
-        const bool nearby = target >= 0 && distance(citizen.x, citizen.y, target % WorldWidth, target / WorldWidth) <= 2;
+        const int target = nearest(citizen.x, citizen.y, 4, area());
+        const bool nearby = target >= 0 && distance(citizen.x, citizen.y, target % width_, target / width_) <= 2;
         if (nearby) {
             if (target != cell) return travel(target);
             const float stockBefore = citizen.food;
@@ -801,7 +976,7 @@ void Simulation::environment() {
     if (tick_ % TicksPerDay == 0) emit("day", "Day " + std::to_string(tick_ / TicksPerDay) + " begins", .05f);
     const float yield = seasonYield();
     std::vector<int> ignitions;
-    for (int i = 0; i < Area; ++i) {
+    for (int i = 0; i < area(); ++i) {
         Tile& ground = tiles_[i];
         ground.traffic *= .999f;
         if (ground.terrain == Terrain::Water || ground.terrain == Terrain::Rock) continue;
@@ -813,11 +988,11 @@ void Simulation::environment() {
             if (ground.structure != Structure::None && ground.fire > .45f && randomUnit(rng_) < .015f) {
                 const bool home = ground.structure == Structure::Home;
                 ground.structure = Structure::None; ground.owner = -1;
-                emit("destruction", home ? "A home burns down" : "Fire consumes a field", .72f, i % WorldWidth, i / WorldWidth);
+                emit("destruction", home ? "A home burns down" : "Fire consumes a field", .72f, i % width_, i / width_);
             }
             if (ground.fire > .4f && randomUnit(rng_) < .04f * config_.hazards) {
                 const auto& direction = Directions[rng_() % 4];
-                const int nx = i % WorldWidth + direction[0], ny = i / WorldWidth + direction[1];
+                const int nx = i % width_ + direction[0], ny = i / width_ + direction[1];
                 if (walkable(nx, ny) && tiles_[indexOf(nx, ny)].fire <= 0 && tiles_[indexOf(nx, ny)].wood > .5f)
                     ignitions.push_back(indexOf(nx, ny));
             }
@@ -839,18 +1014,18 @@ void Simulation::environment() {
     }
     for (int cell : ignitions) tiles_[cell].fire = .7f;
     if (tick_ % 150 == 0 && randomUnit(rng_) < config_.hazards * .22f) {
-        const int cell = static_cast<int>(rng_() % Area);
+        const int cell = static_cast<int>(rng_() % area());
         Tile& ground = tiles_[cell];
         if (ground.terrain == Terrain::Forest && ground.wood > 1) {
             ground.fire = 1;
-            emit("fire", "Lightning ignites the forest", .78f, cell % WorldWidth, cell / WorldWidth);
+            emit("fire", "Lightning ignites the forest", .78f, cell % width_, cell / width_);
         }
     }
     if (tick_ % 450 == 0 && randomUnit(rng_) < config_.hazards * .5f) {
-        const int center = static_cast<int>(rng_() % Area);
-        const int cx = center % WorldWidth, cy = center / WorldWidth;
-        for (int y = std::max(0, cy - 7); y <= std::min(WorldHeight - 1, cy + 7); ++y) {
-            for (int x = std::max(0, cx - 7); x <= std::min(WorldWidth - 1, cx + 7); ++x) {
+        const int center = static_cast<int>(rng_() % area());
+        const int cx = center % width_, cy = center / width_;
+        for (int y = std::max(0, cy - 7); y <= std::min(height_ - 1, cy + 7); ++y) {
+            for (int x = std::max(0, cx - 7); x <= std::min(width_ - 1, cx + 7); ++x) {
                 Tile& ground = tiles_[indexOf(x, y)];
                 ground.fire = 0;
                 if (ground.terrain == Terrain::Grass || ground.terrain == Terrain::Forest) ground.fertility = unit(ground.fertility + .025f);
@@ -999,6 +1174,7 @@ std::uint64_t Simulation::digest() const {
     auto add = [&](auto value) { bytes(&value, sizeof(value)); };
     auto string = [&](const std::string& value) { add(value.size()); bytes(value.data(), value.size()); };
     add(config_.seed); add(config_.founders); add(config_.fertility); add(config_.cooperation); add(config_.hazards);
+    add(config_.shape); add(config_.worldSize);
     add(tick_); add(nextId_); add(epidemic_);
     add(core_ ? core_->digest() : 0ull);
     for (float value : advice_) add(value);

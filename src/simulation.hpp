@@ -8,11 +8,57 @@
 #include <vector>
 
 namespace pixels {
-inline constexpr int WorldWidth = 96;
-inline constexpr int WorldHeight = 64;
+// Classic default dimensions; the chosen world preset may override them.
+inline constexpr int DefaultWorldWidth = 96;
+inline constexpr int DefaultWorldHeight = 64;
+// Source-compatible names for callers that mean the classic preset.
+inline constexpr int WorldWidth = DefaultWorldWidth;
+inline constexpr int WorldHeight = DefaultWorldHeight;
 inline constexpr int TicksPerSecond = 5;
 inline constexpr int TicksPerDay = 300;
 inline constexpr int PopulationLimit = 256;
+
+// Terrain-generation presets for the WORLD SHAPE setup option. Every shape is
+// deterministic from the world seed; they change layout, not the rules.
+enum class WorldShape { Island, Archipelago, InlandSea, Highlands, Riverlands };
+// Discrete world-size presets for the WORLD SIZE setup option.
+enum class WorldSize { Tiny, Small, Classic, Large, Huge };
+inline int worldWidth(WorldSize size) {
+    switch (size) {
+    case WorldSize::Tiny: return 48;
+    case WorldSize::Small: return 64;
+    case WorldSize::Large: return 128;
+    case WorldSize::Huge: return 192;
+    default: return DefaultWorldWidth;
+    }
+}
+inline int worldHeight(WorldSize size) {
+    switch (size) {
+    case WorldSize::Tiny: return 32;
+    case WorldSize::Small: return 40;
+    case WorldSize::Large: return 80;
+    case WorldSize::Huge: return 128;
+    default: return DefaultWorldHeight;
+    }
+}
+inline const char* nameOf(WorldShape shape) {
+    switch (shape) {
+    case WorldShape::Archipelago: return "ARCHIPELAGO";
+    case WorldShape::InlandSea: return "INLAND SEA";
+    case WorldShape::Highlands: return "HIGHLANDS";
+    case WorldShape::Riverlands: return "RIVERLANDS";
+    default: return "ISLAND";
+    }
+}
+inline const char* nameOf(WorldSize size) {
+    switch (size) {
+    case WorldSize::Tiny: return "TINY";
+    case WorldSize::Small: return "SMALL";
+    case WorldSize::Large: return "LARGE";
+    case WorldSize::Huge: return "HUGE";
+    default: return "CLASSIC";
+    }
+}
 
 struct Config {
     std::uint32_t seed = 2026;
@@ -20,6 +66,8 @@ struct Config {
     float fertility = 0.65f;
     float cooperation = 0.7f;
     float hazards = 0.35f;
+    WorldShape shape = WorldShape::Island;
+    WorldSize worldSize = WorldSize::Classic;
     // Worker threads for the deterministic pool (0 = all available cores).
     // The simulation's trace is independent of this value.
     int threads = 0;
@@ -78,6 +126,9 @@ public:
     explicit Simulation(Config config = {});
     void step();
     const Config& config() const { return config_; }
+    // Dimensions of the selected world preset.
+    int width() const { return width_; }
+    int height() const { return height_; }
     std::uint64_t tick() const { return tick_; }
     const std::vector<Tile>& tiles() const { return tiles_; }
     const std::vector<Citizen>& citizens() const { return citizens_; }
@@ -109,6 +160,9 @@ private:
     std::mt19937 rng_;
     std::uint64_t tick_ = 0;
     int nextId_ = 0;
+    // World dimensions from the selected size preset (Classic = 96 x 64).
+    int width_ = DefaultWorldWidth;
+    int height_ = DefaultWorldHeight;
     std::vector<Tile> tiles_;
     std::vector<Citizen> citizens_;
     std::deque<Event> events_;
@@ -125,11 +179,20 @@ private:
     void rebuildDestinations();
     void computeTerritory();
     void generate();
+    void classifyLand(int x, int y, float n, float shore);
+    void generateIsland(float phase);
+    void generateArchipelago(float phase);
+    void generateInlandSea(float phase);
+    void generateHighlands(float phase);
+    void generateRiverlands(float phase);
     void environment();
     void epidemiology();
     float act(Citizen& citizen, Action action);
     void emit(std::string kind, std::string text, float impact, int x = -1, int y = -1);
     void refreshStatistics();
+    int area() const { return width_ * height_; }
+    int indexOf(int x, int y) const { return y * width_ + x; }
+    bool inBounds(int x, int y) const { return x >= 0 && y >= 0 && x < width_ && y < height_; }
     bool walkable(int x, int y) const;
     int nearest(int x, int y, int kind, int radius = 24, int exclude = -1) const;
     bool moveToward(Citizen& citizen, int target);
