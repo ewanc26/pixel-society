@@ -92,6 +92,9 @@ public:
     void learn(const BrainInput& before, Action action, float reward, const BrainInput& after,
                const ActionMask& legal, bool terminal = false);
     void mutate(std::mt19937& rng, float amount = 0.025f);
+    // Social/cultural transmission: blend every parameter toward a donor's
+    // policy. The donor keeps its weights untouched; only the learner moves.
+    void imitate(const Brain& donor, float rate);
     static int parameterCount();
     std::uint64_t updates() const { return updates_; }
     double fingerprint() const;

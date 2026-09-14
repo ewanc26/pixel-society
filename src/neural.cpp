@@ -655,6 +655,27 @@ void Brain::mutate(std::mt19937& rng, float amount) {
     for (float& weight : b3_) perturb(weight);
 }
 
+void Brain::imitate(const Brain& donor, float rate) {
+    rate = std::isfinite(rate) ? std::clamp(rate, 0.0f, 1.0f) : 0.0f;
+    if (rate <= 0.0f || this == &donor) return;
+    auto blend = [&](float& weight, float skill) {
+        if (rate >= 1.0f) { weight = skill; return; }
+        weight = std::clamp(weight + rate * (skill - weight), -ParameterLimit, ParameterLimit);
+    };
+    for (int h = 0; h < HiddenOneCount; ++h) {
+        for (int i = 0; i < BrainInputCount; ++i) blend(w1_[h][i], donor.w1_[h][i]);
+        blend(b1_[h], donor.b1_[h]);
+    }
+    for (int h = 0; h < HiddenTwoCount; ++h) {
+        for (int i = 0; i < HiddenOneCount; ++i) blend(w2_[h][i], donor.w2_[h][i]);
+        blend(b2_[h], donor.b2_[h]);
+    }
+    for (int a = 0; a < ActionCount; ++a) {
+        for (int i = 0; i < HiddenTwoCount; ++i) blend(w3_[a][i], donor.w3_[a][i]);
+        blend(b3_[a], donor.b3_[a]);
+    }
+}
+
 double Brain::fingerprint() const {
     double sum = 0.0;
     std::uint64_t index = 1;

@@ -671,7 +671,14 @@ float Simulation::act(Citizen& citizen, Action action) {
             const float before = citizen.social;
             citizen.social = unit(citizen.social + .22f); other.social = unit(other.social + .12f);
             citizen.cooperation = unit(citizen.cooperation + .0008f * other.cooperation);
-            return .5f * (citizen.social - before) - .007f;
+            // Social contact doubles as oblique cultural transmission: the less
+            // seasoned individual blends its policy toward the more experienced
+            // one, so elders and veterans pass accumulated knowledge onward.
+            Citizen& learner = other.brain.updates() < citizen.brain.updates() ? other : citizen;
+            const Citizen& teacher = &learner == &citizen ? other : citizen;
+            const float rate = .0012f * (0.5f + teacher.cooperation);
+            learner.brain.imitate(teacher.brain, rate);
+            return .5f * (citizen.social - before) - .007f + .015f * teacher.cooperation;
         }
         if (action == Action::Reproduce) {
             if (citizens_.size() >= PopulationLimit || !birthReady(citizen, config_)) return -.03f;
@@ -744,6 +751,7 @@ void Simulation::environment() {
         ground.traffic *= .999f;
         if (ground.terrain == Terrain::Water || ground.terrain == Terrain::Rock) continue;
         if (ground.fire > 0) {
+            if (ground.fire >= .45f) ground.burned = true;
             ground.fire = std::max(0.0f, ground.fire - .012f);
             ground.food = std::max(0.0f, ground.food - .08f);
             ground.wood = std::max(0.0f, ground.wood - .06f);
@@ -759,6 +767,15 @@ void Simulation::environment() {
                     ignitions.push_back(indexOf(nx, ny));
             }
             continue;
+        }
+        // Post-fire succession: a stand-replacing burn reshapes the landscape.
+        // Charred forest gives way to open grass while ash raises fertility in
+        // the clearing, a disturbance niche that keeps fires altering the map.
+        if (ground.burned) {
+            if (ground.terrain == Terrain::Forest) ground.terrain = Terrain::Grass;
+            ground.fertility = unit(ground.fertility + .05f);
+            ground.food = std::min(3.0f, ground.food + .02f);
+            ground.burned = false;
         }
         if (ground.structure == Structure::Home) continue;
         if (ground.structure == Structure::Farm) ground.food = std::min(8.0f, ground.food + .013f * ground.fertility * yield);
@@ -798,10 +815,56 @@ void Simulation::environment() {
     if (tick_ % TicksPerSecond == 0) rebuildDestinations();
 }
 
+void Simulation::epidemiology() {
+    // Deterministic density-driven epidemic model (SIRS): outbreaks spark only
+    // above a crowding threshold, transmission requires physical adjacency,
+    // recovery grants temporary immunity, and immunity slowly wanes again.
+    const float crowding = stats_.population > 0 ? static_cast<float>(stats_.population) / static_cast<float>(PopulationLimit) : 0.0f;
+    if (epidemic_ > 0) --epidemic_;
+    for (Citizen& citizen : citizens_) {
+        if (!citizen.alive) continue;
+        if (citizen.immune > 0) --citizen.immune;
+        if (citizen.sick <= 0) continue;
+        if (--citizen.sick == 0) {
+            citizen.immune = 600 + static_cast<int>(rng_() % 300);
+            emit("recovery", "Citizen " + std::to_string(citizen.id) + " recovers from illness and gains immunity", .14f, citizen.x, citizen.y);
+            continue;
+        }
+        const int neighbour = nearest(citizen.x, citizen.y, 5, 1, citizen.id);
+        if (neighbour < 0) continue;
+        Citizen& contact = citizens_[static_cast<std::size_t>(neighbour)];
+        if (contact.sick > 0 || contact.immune > 0) continue;
+        // Housed citizens self-quarantine: a home sharply cuts the contact risk.
+        const bool quarantined = tiles_[indexOf(citizen.x, citizen.y)].structure == Structure::Home;
+        const float infectionRisk = (quarantined ? .008f : .05f) * config_.hazards * crowding;
+        if (randomUnit(rng_) < infectionRisk) {
+            contact.sick = 120 + static_cast<int>(rng_() % 241);
+            emit("plague", "Citizen " + std::to_string(contact.id) + " catches an infection from " + std::to_string(citizen.id), .55f, contact.x, contact.y);
+        }
+    }
+    if (epidemic_ == 0 && config_.hazards > 0 && !citizens_.empty()) {
+        // Crowded, discontented settlements spark piggybacking outbreaks far
+        // more readily than small rustic communities.
+        const float ignition = .004f * config_.hazards * crowding * (1.0f - .5f * stats_.wellbeing);
+        if (randomUnit(rng_) < ignition) {
+            epidemic_ = 800;
+            int seeded = 0;
+            for (int attempt = 0; attempt < static_cast<int>(citizens_.size()) && seeded < 2; ++attempt) {
+                Citizen& target = citizens_[rng_() % citizens_.size()];
+                if (!target.alive || target.sick > 0 || target.immune > 0) continue;
+                target.sick = 60 + static_cast<int>(rng_() % 241);
+                ++seeded;
+                emit("plague", "Illness sweeps through the settlement and Citizen " + std::to_string(target.id) + " falls sick", .6f, target.x, target.y);
+            }
+        }
+    }
+}
+
 void Simulation::step() {
     ++tick_;
     citizens_.erase(std::remove_if(citizens_.begin(), citizens_.end(), [](const Citizen& citizen) { return !citizen.alive; }), citizens_.end());
     environment();
+    epidemiology();
     // This tick's shared advisory context, derived from the current population.
     advice_ = currentAdvice();
     const std::size_t actors = citizens_.size();
@@ -827,12 +890,13 @@ void Simulation::step() {
                        std::max(0.0f, citizen.thirst - .85f) * .035f +
                        std::max(0.0f, .06f - citizen.energy) * .012f + ground.fire * .025f;
         if (citizen.age > 7200) damage += .0008f + (citizen.age - 7200) * .000001f;
+        if (citizen.sick > 0) damage += (ground.structure == Structure::Home ? .003f : .006f) * (0.5f + citizen.hunger);
         if (damage > 0) citizen.health = unit(citizen.health - damage);
         else if (citizen.hunger < .7f && citizen.thirst < .7f && citizen.energy > .15f) citizen.health = unit(citizen.health + .0015f);
         reward += (comfort(citizen) - previousComfort) * 1.5f -
                   .035f * (citizen.hunger * citizen.hunger + citizen.thirst * citizen.thirst) - damage * 5;
         if (citizen.health <= 0) {
-            const std::string cause = citizen.age > 7200 ? "old age" : ground.fire > .1f ? "fire" :
+            const std::string cause = citizen.age > 7200 ? "old age" : citizen.sick > 0 ? "disease" : ground.fire > .1f ? "fire" :
                                       citizen.thirst >= .95f ? "dehydration" : citizen.hunger >= .95f ? "starvation" : "injury";
             die(citizen, cause);
             reward -= 1.5f;
@@ -879,19 +943,20 @@ std::uint64_t Simulation::digest() const {
     auto add = [&](auto value) { bytes(&value, sizeof(value)); };
     auto string = [&](const std::string& value) { add(value.size()); bytes(value.data(), value.size()); };
     add(config_.seed); add(config_.founders); add(config_.fertility); add(config_.cooperation); add(config_.hazards);
-    add(tick_); add(nextId_);
+    add(tick_); add(nextId_); add(epidemic_);
     add(core_ ? core_->digest() : 0ull);
     for (float value : advice_) add(value);
     auto rngCopy = rng_;
     for (std::size_t i = 0; i < std::mt19937::state_size; ++i) add(rngCopy());
     for (const Tile& ground : tiles_) {
         add(ground.terrain); add(ground.structure); add(ground.food); add(ground.wood); add(ground.fertility);
-        add(ground.fire); add(ground.traffic); add(ground.owner);
+        add(ground.fire); add(ground.traffic); add(ground.owner); add(ground.burned);
     }
     add(citizens_.size());
     for (const Citizen& citizen : citizens_) {
         add(citizen.id); add(citizen.x); add(citizen.y); add(citizen.clan); add(citizen.generation);
         add(citizen.age); add(citizen.birthCooldown); add(citizen.alive);
+        add(citizen.sick); add(citizen.immune);
         add(citizen.health); add(citizen.hunger); add(citizen.thirst); add(citizen.energy); add(citizen.social);
         add(citizen.food); add(citizen.wood); add(citizen.cooperation); add(citizen.aggression);
         add(citizen.action); add(citizen.lastReward); add(citizen.brain.updates()); add(citizen.brain.digest());

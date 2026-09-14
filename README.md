@@ -57,6 +57,15 @@ only changes what you see. Close the window to finish the experiment.
 - Cooperation, competition, inherited traits and learned policies influence
   how the population develops. Children inherit a mutated parental network.
 - Seasonal production and environmental hazards change conditions over time.
+- Fires are disturbance events: a stand-replacing burn scars the land and then
+  regenerates as grass clearings with boosted ash fertility, reshaping the map
+  season after season.
+- Crowded, unhappy settlements can kindle density-driven **plagues**. Disease
+  spreads between adjacent citizens, housed citizens self-quarantine and spread
+  it far less, survivors gain temporary immunity, and immunity slowly wanes.
+- Social contact doubles as **cultural transmission**: the less experienced
+  citizen blends its policy toward the more seasoned one, so elders and
+  veterans pass learned behaviour onward between generations.
 - The observer shows live population, wellbeing, neural action values, sensor
   group summaries and data quality, history, and scored events. The population
   is bounded at 256 for predictable performance.
@@ -136,10 +145,11 @@ ctest --test-dir build-sanitize --output-on-failure
 
 Tests cover 82 finite normalized observations across individual and world
 change, a high-index sensor that changes learned action values, deeper neural
-learning and decision changes, legal action masking, inheritance, five-tick
-timing with retained frame debt, seeded determinism, autonomous construction
-and births, resource and population invariants, event scores, and extreme
-starting conditions. The society-core constructor is asserted to be over ten
+learning and decision changes, legal action masking, inheritance and cultural
+imitation, five-tick timing with retained frame debt, seeded determinism,
+autonomous construction and births, the emergent disease, fire-succession and
+transmission mechanics, resource and population invariants, event scores, and
+extreme starting conditions. The society-core constructor is asserted to be over ten
 million parameters, its training is deterministic across identical seeds, and
 a dedicated check proves per-citizen policies react to the advisory channels.
 The interface smoke test injects SDL input through setup and observation

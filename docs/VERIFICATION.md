@@ -66,13 +66,14 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 
-5 / 5 tests passed in 56.20 seconds
+5 / 5 tests passed in 61.38 seconds
 ```
 
 Those tests cover neural inference and backpropagation, the ten-million-plus
 parameter per-civilization society core and its deterministic training,
-advice-channel sensitivity, action masking, mutation/inheritance, the fixed
-200 ms clock and catch-up debt, seeded determinism, worker-count invariance,
+advice-channel sensitivity, action masking, mutation/inheritance and social
+imitation, the fixed 200 ms clock and catch-up debt, seeded determinism,
+worker-count invariance, the emergent disease/fire/transmission mechanics,
 autonomous construction and reproduction, score bounds, world invariants,
 invalid input and the SDL observer flow.
 
@@ -84,7 +85,7 @@ cmake -S . -B build-sanitize -DPIXEL_SOCIETY_GUI=OFF \
 cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 
-4 / 4 tests passed in 65.39 seconds
+4 / 4 tests passed in 93.59 seconds
 ```
 
 The sanitizer configuration keeps the same test categories but uses a shorter
@@ -103,18 +104,19 @@ observer:
 ```
 
 It represents 1,200 simulated seconds (20 game days). On the release build it
-finished on this machine in 24.72 seconds wall-clock with ten worker threads,
-256 citizens, 268 births, 60 deaths, generation 4, 94.52% wellbeing, 1,355,835
-neural decisions and 1,355,839 learning updates, and a civilization seed-42
+finished on this machine in 22.69 seconds wall-clock with ten worker threads,
+256 citizens, 306 births, 98 deaths, generation 5, 92.39% wellbeing, 1,353,682
+neural decisions and 1,353,688 learning updates, and a civilization seed-42
 society core of 12,002,316 parameters. Every one of the twelve intentions had a
-nonzero action count. The JSONL log contained 85,564 scored events; a range
-check found zero scores outside 0–100. Sharing and conflict dominate the
-chronicle here as the advice-informed policies cooperate and compete more
-actively than the original release.
+nonzero action count. The JSONL log contained 117,286 scored events; a range
+check found zero scores outside 0–100. Sharing, fire, plague and recovery
+events now shape the chronicle: the emergent mechanics raise death and event
+volume above the earlier snapshot while the society keeps reproducing under
+the added disease pressure.
 
 Two independent runs with those same settings produced the same deterministic
-world digest: `15063840643231085035`. The digest is independent of the worker
-pool as well as of wall-clock time: the same world run with one, four or 256
+world digest: `13830909894271019662`. The digest is independent of the worker
+pool as well as of wall-clock time: the same world run with one, ten or 256
 threads reported the identical digest. Because each civilization trains its own
 core from its world seed, this snapshot's digest and population statistics
 differ from the earlier shared-core release: the seed-42 civilization's core

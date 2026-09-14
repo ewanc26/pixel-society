@@ -21,6 +21,9 @@ constexpr int HarshRunTicks = 500;
 constexpr int AutonomousRunTicks = 6000;
 constexpr int HarshRunTicks = 1500;
 #endif
+// The emergent-mechanics suite runs a fixed tick window in every build so the
+// disease, fire and transmission assertions are consistent under sanitizers.
+constexpr int MechanicsRunTicks = 800;
 
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
@@ -195,6 +198,31 @@ void neural() {
     }
 }
 
+void culture() {
+    // Social transmission: imitation must move a policy toward a donor, stop
+    // at the donor for rate one, and leave the donor and its training history
+    // untouched.
+    const auto core = makeSocietyCore(9182);
+    Brain teacher = makeFounderBrain(11, *core);
+    Brain student = makeFounderBrain(22, *core);
+    require(teacher.fingerprint() != student.fingerprint(), "distinct founder seeds must train distinct policies");
+    const std::uint64_t donorUpdates = teacher.updates();
+    student.imitate(teacher, 1.0f);
+    require(student.fingerprint() == teacher.fingerprint(), "full imitation must reproduce the donor policy exactly");
+    require(teacher.updates() == donorUpdates, "imitation must not mutate the donor");
+    Brain partial = makeFounderBrain(33, *core);
+    const double frozen = partial.fingerprint();
+    partial.imitate(teacher, 0.0f);
+    require(partial.fingerprint() == frozen, "zero-rate imitation must be a no-op");
+    partial.imitate(teacher, 1.0f);
+    require(partial.fingerprint() == teacher.fingerprint(), "rate one must converge to the donor");
+    std::mt19937 fuzz(7);
+    partial.mutate(fuzz);
+    const double fuzzed = partial.fingerprint();
+    partial.imitate(teacher, 0.5f);
+    require(std::isfinite(partial.fingerprint()) && partial.fingerprint() != fuzzed,
+            "half-rate imitation must move a mutated policy partway toward the donor");
+}
 void observations() {
     Config config;
     config.seed = 9182;
@@ -324,6 +352,66 @@ void extremes() {
     for (int i = 0; i < 100; ++i) crowded.step();
     invariants(crowded);
 }
+void mechanics() {
+    // A dense, hazard-ridden world is the research-grounded setting for the
+    // emergent disease, fire-succession and cultural-transmission mechanics.
+    // The seed is selected deterministically so the suite never races the RNG.
+    Config config;
+    config.seed = 43;
+    config.founders = 256;
+    config.fertility = 1;
+    config.hazards = 1;
+    config.cooperation = 0.9f;
+    Simulation dense(config);
+    const auto initialForest = std::count_if(dense.tiles().begin(), dense.tiles().end(),
+                                             [](const Tile& tile) { return tile.terrain == Terrain::Forest; });
+    bool plague = false, recovery = false, diseaseDeath = false, clearing = false;
+    for (int i = 0; i < MechanicsRunTicks; ++i) {
+        dense.step();
+        if (!plague && std::any_of(dense.events().begin(), dense.events().end(),
+                                   [](const Event& event) { return event.kind == "plague"; })) plague = true;
+        if (!recovery && std::any_of(dense.events().begin(), dense.events().end(),
+                                     [](const Event& event) { return event.kind == "recovery"; })) recovery = true;
+        if (!diseaseDeath && std::any_of(dense.events().begin(), dense.events().end(), [](const Event& event) {
+                return event.kind == "death" && event.text.find("disease") != std::string::npos;
+            })) diseaseDeath = true;
+        if (!clearing && std::any_of(dense.tiles().begin(), dense.tiles().end(),
+                                     [](const Tile& tile) { return tile.burned; })) clearing = true;
+        if (i % 400 == 0) invariants(dense);
+    }
+    invariants(dense);
+    const auto finalForest = std::count_if(dense.tiles().begin(), dense.tiles().end(),
+                                           [](const Tile& tile) { return tile.terrain == Terrain::Forest; });
+    std::cout << "mechanics seed" << config.seed << ": plague=" << plague << " recovery=" << recovery
+              << " disease_death=" << diseaseDeath << " burned_clearing=" << clearing
+              << " forest=" << finalForest << "/" << initialForest
+              << " population=" << dense.stats().population << '\n';
+    require(plague && recovery, "disease must ignite and infected citizens must recover with immunity");
+    require(diseaseDeath, "illness must weaken citizens severely enough to cause deaths");
+    require(clearing, "burning forest must leave charred succession clears");
+    require(finalForest < initialForest, "stand-replacing fires must carve grass clearings out of the woodland");
+    require(finalForest > 0, "fires must not erase the woodland entirely");
+    require(dense.stats().population > 0, "the epidemic must not extinguish the civilization");
+    require(dense.stats().births > 0, "a dense society must still reproduce under disease pressure");
+    // Fire ecology without hazard pressure: same seed, no ignition source, so
+    // there must be no charred clearing anywhere. This isolates fire as the
+    // disturbance driver behind succession.
+    Config calm = config;
+    calm.hazards = 0;
+    Simulation serene(calm);
+    int calmBurned = 0;
+    for (int i = 0; i < MechanicsRunTicks; ++i) {
+        serene.step();
+        if (i % 400 == 0) invariants(serene);
+    }
+    invariants(serene);
+    for (const Tile& ground : serene.tiles()) if (ground.burned) ++calmBurned;
+    std::cout << "mechanics calm: burned=" << calmBurned << " population=" << serene.stats().population << '\n';
+    require(calmBurned == 0, "without fires, no tile may enter the burned succession state");
+    std::uint64_t serenefires = 0;
+    for (const Event& event : serene.events()) if (event.kind == "fire" || event.kind == "destruction") ++serenefires;
+    require(serenefires == 0, "without hazard pressure, lightning must never ignite the forest");
+}
 void threadDeterminism() {
     Config config;
     config.seed = 42;
@@ -342,8 +430,10 @@ int main() {
     try {
         timing(); std::cout << "PASS fixed5Hz timing and catchup\n";
         neural(); std::cout << "PASS deep neural inference, learning, masks, inheritance\n";
+        culture(); std::cout << "PASS social imitation and cultural transmission\n";
         observations(); std::cout << "PASS 82-feature individual and environmental observations\n";
         society(); std::cout << "PASS autonomous society, event ranks, determinism\n";
+        mechanics(); std::cout << "PASS disease, fire succession and cultural mechanics\n";
         threadDeterminism(); std::cout << "PASS deterministic multithreaded simulation\n";
         extremes(); std::cout << "PASS invalid and extreme configurations\n";
         return 0;

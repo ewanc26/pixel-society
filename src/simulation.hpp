@@ -35,10 +35,12 @@ struct Tile {
     float fire = 0;
     float traffic = 0;
     int owner = -1;
+    bool burned = false;
 };
 struct Citizen {
     int id = 0, x = 0, y = 0, clan = 0, generation = 0;
     int age = 0, birthCooldown = 0;
+    int sick = 0, immune = 0;
     bool alive = true;
     float health = 1, hunger = 0.2f, thirst = 0.2f, energy = 0.85f, social = 0.5f;
     float food = 4, wood = 0, cooperation = 0.7f, aggression = 0.15f;
@@ -107,6 +109,8 @@ private:
     std::deque<Event> events_;
     std::deque<HistoryPoint> history_;
     Statistics stats_;
+    // Epidemic state: a nonzero counter is an active plague wave in progress.
+    int epidemic_ = 0;
     // Multi-source breadth-first fields provide reachable resources, not straight-line guesses.
     std::array<std::vector<int>, 5> destinations_;
     std::array<std::vector<int>, 5> distances_;
@@ -114,6 +118,7 @@ private:
     void rebuildDestinations();
     void generate();
     void environment();
+    void epidemiology();
     float act(Citizen& citizen, Action action);
     void emit(std::string kind, std::string text, float impact, int x = -1, int y = -1);
     void refreshStatistics();

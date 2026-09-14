@@ -165,6 +165,50 @@ exhaust resources or die out; survival and growth are outcomes rather than
 guarantees. Reproducibility is within a build: floating-point math and standard
 normal-distribution implementations can differ across toolchains.
 
+## Emergent mechanics
+
+Three research-grounded mechanisms couple the citizen policies to a living,
+disturbance-prone world. All of them are deterministic, run serially on the
+main thread, and add no observation slots, so the 82-feature contract and the
+thread-count-invariant digest are unchanged.
+
+### Density-driven disease (SIRS)
+
+Outbreaks follow an SIRS compartment model driven by crowding. Each tick,
+`epidemiology()` computes the settlement's crowding as population ÷ 256 and,
+when no wave is active, rolls an ignition chance scaled by hazard level,
+crowding and wellbeing — a dense, discontented settlement is far more likely
+to kindle a `plague` than a sparse village. When a wave sparks it runs for 800
+ticks and seeds one or two infections. Cases advance deterministically:
+an infected citizen tries to transmit to one physically adjacent neighbour per
+tick with a risk proportional to hazard and crowding; a citizen standing on a
+**Home** tile self-quarantines and spreads much less disease. Sickness lasts a
+few hundred ticks, weakens the carrier (extra health damage that increases
+with hunger), and a carrier who dies while sick is recorded with the cause
+`"disease"`. Survivors gain temporary immunity that wanes again. Because each
+sick citizen only ever reaches a neighbouring citizen, outbreak contours
+emerge from local contact rather than a global formula.
+
+### Fire-driven succession
+
+Fire is a disturbance with a lasting ecological imprint. A tile that burns at
+high intensity is marked `burned`; after the fire goes out (naturally or
+quenched by a storm) its forest is replaced by grass, its fertility rises as
+ash enriches the clearing, and the scar resets. Bright regrowth means a
+burned-out woodland becomes an open, more fertile grassland until the next
+disturbance, giving fires a genuine successional role instead of a simple
+penalty.
+
+### Social and cultural transmission
+
+`Brain::imitate(donor, rate)` moves every parameter of a learner's network a
+chosen distance toward a donor's policy. Each Socialize action applies it to
+the less-seasoned participant (fewer accumulated learning updates), so older,
+more experienced citizens and veterans pass accumulated behaviour onward
+while the donor's own weights are never touched. Like mutation and inheritance
+this is a pure weight-space operation: it changes learned tendencies, not the
+observation or action contract.
+
 ## Event importance is separate
 
 Every recorded world event has an integer importance score from **0 to 100**.
