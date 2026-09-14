@@ -81,7 +81,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 
-5 / 5 tests passed in 62.77 seconds
+5 / 5 tests passed in 71.51 seconds
 ```
 
 Those tests cover neural inference and backpropagation, the ten-million-plus
@@ -101,7 +101,7 @@ cmake -S . -B build-sanitize -DPIXEL_SOCIETY_GUI=OFF \
 cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 
-4 / 4 tests passed in 95.70 seconds
+4 / 4 tests passed in 113.18 seconds
 ```
 
 The sanitizer configuration keeps the same test categories but uses a shorter
@@ -120,18 +120,18 @@ observer:
 ```
 
 It represents 1,200 simulated seconds (20 game days). On the release build it
-finished on this machine in 22.185 seconds wall-clock with ten worker threads,
-256 citizens, 306 births, 98 deaths, generation 5, 92.39% wellbeing, 1,353,682
-neural decisions and 1,353,688 learning updates, and a civilization seed-42
+finished on this machine in 24.638 seconds wall-clock with ten worker threads,
+256 citizens, 270 births, 62 deaths, generation 4, 94.57% wellbeing, 1,353,768
+neural decisions and 1,353,776 learning updates, and a civilization seed-42
 society core of 12,002,316 parameters. Every one of the twelve intentions had a
-nonzero action count. The JSONL log contained 117,286 scored events; a range
+nonzero action count. The JSONL log contained 137,615 scored events; a range
 check found zero scores outside 0–100. Sharing, fire, plague and recovery
 events now shape the chronicle: the emergent mechanics raise death and event
 volume above the earlier snapshot while the society keeps reproducing under
 the added disease pressure.
 
 Two independent runs with those same settings produced the same deterministic
-world digest: `14770410760975234110`. The digest is independent of the worker
+world digest: `18428606461124059589`. The digest is independent of the worker
 pool as well as of wall-clock time: the same world run with one, ten or 256
 threads reported the identical digest. The territory labels now contribute to
 the digest (and therefore shift it from the mechanics-only snapshot), while
@@ -145,7 +145,7 @@ and size are also part of that contract.
 ## Expanded-world spot check
 
 The headless runner also completed 300 ticks of a Huge (192 × 128)
-Archipelago at four workers in 0.838 seconds wall-clock. The resulting society
+Archipelago at four workers in 0.907 seconds wall-clock. The resulting society
 held 94 residents, had 215 homes and 175 farms, and reported the same
 12,002,316 core parameters as the Classic world. This is an evidence point for
 the larger map path rather than a claim that every terrain/size/seed combination

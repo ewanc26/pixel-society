@@ -1013,14 +1013,23 @@ void Simulation::environment() {
         if (ground.terrain == Terrain::Forest) ground.wood = std::min(5.0f, ground.wood + .0025f * yield);
     }
     for (int cell : ignitions) tiles_[cell].fire = .7f;
-    if (tick_ % 150 == 0 && randomUnit(rng_) < config_.hazards * .22f) {
-        const int cell = static_cast<int>(rng_() % area());
-        Tile& ground = tiles_[cell];
-        if (ground.terrain == Terrain::Forest && ground.wood > 1) {
+    // Lightning needs to find combustible forest rather than silently missing
+    // because a random sample landed on water or bare grass. At the maximum
+    // hazard setting, a recurring dry-season strike also makes severe fire
+    // ecology a reliable part of that deliberately extreme world profile.
+    auto igniteForest = [&](int start) {
+        for (int offset = 0; offset < area(); ++offset) {
+            const int cell = (start + offset) % area();
+            Tile& ground = tiles_[cell];
+            if (ground.terrain != Terrain::Forest || ground.wood <= 1 || ground.fire > 0) continue;
             ground.fire = 1;
             emit("fire", "Lightning ignites the forest", .78f, cell % width_, cell / width_);
+            return;
         }
-    }
+    };
+    const bool severeDrySeason = config_.hazards >= .9f && tick_ % 300 == 0;
+    if (tick_ % 150 == 0 && (severeDrySeason || randomUnit(rng_) < config_.hazards * .22f))
+        igniteForest(static_cast<int>(rng_() % area()));
     if (tick_ % 450 == 0 && randomUnit(rng_) < config_.hazards * .5f) {
         const int center = static_cast<int>(rng_() % area());
         const int cx = center % width_, cy = center / width_;

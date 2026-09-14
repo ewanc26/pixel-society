@@ -320,8 +320,10 @@ int activeSensors(const Observation& observation, int first, int count) {
 void sensorGroup(Canvas& out, int y, const std::string& label, const Observation& observation,
                  int first, int count, Color color) {
     out.text(524,y,label,Muted);
-    out.rect(592,y+1,72,5,Dark);
-    out.rect(592,y+1,static_cast<int>(72*sensorMean(observation,first,count)),5,color);
+    // Leave a visible gap after the widest label ("SOCIAL / MEM") so its
+    // last glyph never touches the meter in the compact inspector.
+    out.rect(600,y+1,64,5,Dark);
+    out.rect(600,y+1,static_cast<int>(64*sensorMean(observation,first,count)),5,color);
     out.text(671,y,std::to_string(activeSensors(observation,first,count))+
              "/"+std::to_string(count),color);
 }
@@ -348,9 +350,10 @@ void drawInspector(Canvas& out, const Simulation& sim, const View& view) {
     compactMeter(out,636,116,"HUNGER",c->hunger,Gold);
     compactMeter(out,524,130,"THIRST",c->thirst,0xff91d3e6);
     compactMeter(out,636,130,"ENERGY",c->energy,Teal);
-    out.text(524,145,std::to_string(InputCount)+" SENSORS + "+std::to_string(ActionCount)+
-             " ADVICE > "+std::to_string(HiddenOneCount)+" > "+std::to_string(HiddenTwoCount)+
-             " > "+std::to_string(ActionCount)+" Q",Muted);
+    // Keep the model summary readable at the native 768px layout. The former
+    // one-line topology extended beyond the inspector on the right edge.
+    out.text(524,145,"LOCAL: "+std::to_string(InputCount)+" SENSORS + "+
+             std::to_string(ActionCount)+" ADVICE",Muted);
     out.text(524,158,"SOCIETY CORE 82>2048>2560>2560>12",Gold);
     out.text(524,172,"12.0M PARAMS, PER CIVILIZATION",Muted);
 
@@ -484,7 +487,9 @@ void darken(Canvas& out) {
 }
 void drawSetup(Canvas& out, const Config& config, int selectedField) {
     darken(out);
-    out.rect(144,95,480,326,Dark); out.frame(144,95,480,326,Edge);
+    // The start control ends at y=435; keep it inside the dialog with a
+    // little breathing room below instead of letting it protrude past the frame.
+    out.rect(144,95,480,350,Dark); out.frame(144,95,480,350,Edge);
     out.rect(144,95,480,3,Teal);
     out.text(168,113,"THE FIRST CONDITIONS",Cream,2);
     out.text(168,139,"YOUR ONLY INTERVENTION. THEIR ENTIRE FUTURE.",Muted);
