@@ -6,19 +6,19 @@
 
 namespace pixels {
 // The observation contract is deliberately explicit: every citizen sees the
-// same 82 normalized environmental, social and historical measurements.
-inline constexpr int InputCount = 82;
+// same 92 normalized environmental, social, historical and economic measurements.
+inline constexpr int InputCount = 92;
 inline constexpr int HiddenOneCount = 56;
 inline constexpr int HiddenTwoCount = 28;
 // Kept as a source-compatible name for callers that used the original single
 // hidden-layer constant. New code should name the layer it means.
 inline constexpr int HiddenCount = HiddenOneCount;
-inline constexpr int ActionCount = 12;
+inline constexpr int ActionCount = 13;
 
 // The society core is a per-civilization neural network with over ten million
 // trainable parameters. Every simulation trains its own core from its world
 // seed, then every living citizen reads that civilization's advice on top of
-// its own 82 live sensors. One advisory channel is produced per action.
+// its own 92 live sensors. One advisory channel is produced per action.
 inline constexpr int CoreHiddenOneCount = 2048;
 inline constexpr int CoreHiddenTwoCount = 2560;
 inline constexpr int CoreHiddenThreeCount = 2560;
@@ -28,8 +28,8 @@ using Observation = std::array<float, InputCount>;
 using Values = std::array<float, ActionCount>;
 using ActionMask = std::array<bool, ActionCount>;
 using CoreInput = std::array<float, InputCount>;
-// A citizen policy input is its own 82-feature observation plus the society
-// core's 12 normalized advisory values, so individual needs and shared
+// A citizen policy input is its own 92-feature observation plus the society
+// core's 13 normalized advisory values, so individual needs and shared
 // society context always reach the same network.
 inline constexpr int BrainInputCount = InputCount + CoreAdviceCount;
 using BrainInput = std::array<float, BrainInputCount>;
@@ -37,22 +37,22 @@ using BrainInput = std::array<float, BrainInputCount>;
 BrainInput compose(const Observation& observation, const Values& advice);
 
 // Order is part of the policy's observation/action contract.
-enum class Action { Wander, Gather, Eat, Drink, Rest, Chop, Build, Farm, Share, Socialize, Reproduce, Attack };
+enum class Action { Wander, Gather, Eat, Drink, Rest, Chop, Build, Farm, Share, Socialize, Reproduce, Attack, Haul };
 const char* actionName(Action action);
 
 // Shared society-wide core network. One instance exists per simulation and is
 // shared by every citizen of that civilization; it summarizes the population's
 // mean observation into normalized per-action advice that individual policies
 // combine with their own state. Its trained parameters are distinct for each
-// world seed. It holds 12,002,316 trainable scalar parameters.
+// world seed. It holds 12,025,357 trainable scalar parameters.
 class SocietyCore {
 public:
     explicit SocietyCore(std::uint32_t seed = 0xC03E5EEDu);
     // Advisor values in [0,1], one per action, for one society aggregate
     // observation (normally the population mean of all living citizens).
     Values advise(const CoreInput& society) const;
-    // Fit all twelve advisory outputs toward bounded targets (mean squared
-    // error). Returns the mean squared error over all twelve outputs.
+    // Fit all thirteen advisory outputs toward bounded targets (mean squared
+    // error). Returns the mean squared error over all thirteen outputs.
     float train(const CoreInput& society, const Values& targets, float rate = 0.05f);
     static int parameterCount();
     std::uint64_t digest() const;
@@ -68,7 +68,7 @@ private:
     std::array<float, ActionCount> cb4_{};
     // A core is only trained while it is being prepared.  Thereafter it is
     // shared read-only by every resident, so cache its very expensive
-    // parameter digest instead of walking twelve million floats for every
+    // parameter digest instead of walking twelve-million-plus floats for every
     // diagnostic world digest.
     mutable std::uint64_t cachedDigest_ = 0;
     mutable bool digestValid_ = false;

@@ -9,10 +9,10 @@ thrive.
 
 The controller is deliberately tested through its public architecture
 constants rather than only described that way. The core suite asserts the
-**society core** is `82 → 2048 → 2560 → 2560 → 12` with
-`SocietyCore::parameterCount() >= 10,000,000` (actual value: 12,002,316), and
-that the personal network is `94 → 56 → 28 → 12` (7,264 parameters) over 82
-observation bits plus 12 core advisory channels. It then exercises all 82
+**society core** is `92 → 2048 → 2560 → 2560 → 13` with
+`SocietyCore::parameterCount() >= 10,000,000` (actual value: 12,025,357), and
+that the personal network is `105 → 56 → 28 → 13` (7,909 parameters) over 92
+observation bits plus 13 core advisory channels. It then exercises all 92
 observation positions through a normal seeded world. It checks that every value
 is finite and normalized, that substantial data exists in both the lower and
 high-index halves at the start, and that broad individual/world sampling
@@ -22,7 +22,7 @@ conditions, so the check measures coverage rather than demanding every optional
 condition at tick zero.
 
 The deep-tail regression check creates two observations that differ only at
-input 81. It trains a single action value toward opposite targets and requires
+input 91. It trains a single action value toward opposite targets and requires
 the resulting values to separate. This catches a disconnected final feature or
 a shallow implementation that silently ignores the high-index observation
 data. A companion advisory-channel check trains identical personal networks
@@ -37,9 +37,17 @@ The ordinary learning, action-mask, mutation, temporal-difference and long-world
 checks still run alongside these.
 
 The desktop observer now renders both network architectures from the same public
-constants, five groups covering the ordered observation contract, and a live
-finite/normalized sensor count. Its SDL smoke scenario verifies that this
-inspector, selection, layers and guide remain observation-only after start.
+constants, six groups covering the ordered observation contract, and a live
+finite/normalized sensor count. Its SDL smoke scenario verifies that the
+inspector, selection, layers, guide and pausing observer menu remain
+observation-only after start.
+
+The core suite also runs a seeded autonomous economy scenario. It requires
+builders to establish storehouses, the neural `Haul` intention to make real
+deliveries, clan reserves to remain within per-storehouse capacity, and headline
+statistics, tile structures and clan ledgers to agree. It then verifies that the
+nine economy inputs and courier experience become live rather than remaining
+declared but disconnected fields.
 
 ## Landscape and scale checks
 
@@ -70,7 +78,31 @@ cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 ```
 
-## Initial public-release snapshot
+## Current validation
+
+The current Release build completed all six CTest entries in **32.76 seconds**.
+That includes the core suite, CLI help and invalid-input checks, a headless
+run, and the native SDL observer smoke flow. The latter confirmed selection,
+all four map layers, the guide, the new pause/resume menu, frozen menu time and
+an untouched reference-world digest:
+
+```text
+UI smoke: PASS; ticks=12; expected_at_5Hz=12; setup=1; setup_frozen=1;
+setup_locked=1; selection=1; layers=1; guide=1; menu=1; pause_frozen=1;
+resumed=1; observer_preserved_world=1
+```
+
+The AddressSanitizer and UndefinedBehaviorSanitizer configuration completed all
+five non-GUI CTest entries in **56.28 seconds**. Its 160-tick seeded economy
+case established four storehouses, retained real food and wood reserves, and
+executed deliveries through the `Haul` action. The headless summary now reports
+these values directly alongside the existing construction and neural fields.
+
+## Historical pre-economy baseline
+
+The following measurements are retained from the earlier 82-input / 12-action
+release for comparison. They are not assertions about the current 92-input,
+13-action build.
 
 ## Automated checks
 

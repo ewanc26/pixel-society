@@ -178,8 +178,11 @@ int main(int argc, char** argv) {
                   << ",\"population\":" << s.population
                   << ",\"births\":" << s.births << ",\"deaths\":" << s.deaths
                   << ",\"homes\":" << s.homes << ",\"farms\":" << s.farms
+                  << ",\"stores\":" << s.stores
                   << ",\"generation\":" << s.generation << ",\"wellbeing\":" << s.wellbeing
+                  << ",\"reserve_food\":" << s.reserveFood << ",\"reserve_wood\":" << s.reserveWood
                   << ",\"decisions\":" << s.decisions << ",\"learning_updates\":" << s.learningUpdates
+                  << ",\"hauls\":" << s.hauls
                   << ",\"events\":" << s.eventCount << ",\"core_parameters\":" << pixels::SocietyCore::parameterCount()
                   << ",\"citizen_parameters\":" << pixels::Brain::parameterCount()
                   << ",\"digest\":" << simulation.digest()

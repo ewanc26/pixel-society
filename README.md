@@ -8,16 +8,17 @@ and hazard level, then watch citizens forage, build, farm, share, form new
 generations and struggle to survive. Once the simulation begins, the interface
 only observes.
 
-A shared **society core** (82 → 2048 → 2560 → 2560 → 12,
-**12,002,316 trainable parameters**) reads the living population's average
+A shared **society core** (92 → 2048 → 2560 → 2560 → 13,
+**12,025,357 trainable parameters**) reads the living population's average
 sensor view once each tick and broadcasts one advisory signal per intention.
-Every citizen combines those 12 advisory channels with its own live view and
-runs a personal **94 → 56 → 28 → 12 neural network** (7,264 parameters) that
-ranks intentions, then learns from the consequences. The 82 raw signals include
+Every citizen combines those 13 advisory channels with its own live view and
+runs a personal **105 → 56 → 28 → 13 neural network** (7,909 parameters) that
+ranks intentions, then learns from the consequences. The 92 raw signals include
 individual needs and inventory, the current tile, nearby resources and hazards,
-settlement and neighbourhood patterns, and seasonal and population context. The
-desktop world advances at **five game ticks per second**. Every recorded event
-has an integer importance score from **0 to 100**.
+settlement and neighbourhood patterns, seasonal and population context, plus
+live clan reserve, storage-route and courier-skill data. The desktop world
+advances at **five game ticks per second**. Every recorded event has an integer
+importance score from **0 to 100**.
 
 The terrain, structures, citizens, charts and bitmap lettering are drawn from
 pixels. There are no downloaded graphics, fonts, models, AI services or API keys.
@@ -41,7 +42,9 @@ SDL2 2.0.18+. Windows has not been verified.
 Choose the initial conditions on the setup screen and begin. After that,
 citizens decide what to do; there are no building tools, orders, speed controls,
 or resource injections. Selecting a citizen and changing an observation layer
-only changes what you see. Close the window to finish the experiment.
+only changes what you see. Press **M** or **Esc** for the observer menu: resume,
+return to world setup, open the guide or quit. The menu pauses the simulation
+and does not alter its rules or state.
 
 ## A society, tick by tick
 
@@ -50,10 +53,13 @@ only changes what you see. Close the window to finish the experiment.
   is deterministic from the chosen seed and supplies distinct routes, coasts,
   forests and renewable food.
 - Individual citizens experience hunger, thirst, fatigue, health and social needs.
-- Neural outputs rank twelve intentions: wander, gather, eat, drink, rest, chop,
-  build, farm, share, socialize, reproduce and attack.
+- Neural outputs rank thirteen intentions: wander, gather, eat, drink, rest,
+  chop, build, farm, share, socialize, reproduce, attack and haul.
 - Citizens navigate the land and consume actual shared world resources. Homes
   and farms arise from their own work and timber inventories.
+- Once a clan has shelter, a well-stocked builder can establish a **storehouse**.
+  Citizens learn logistics from actual deliveries, following their clan's route
+  field to stock food and wood reserves or provision themselves from them.
 - Every civilization's own trained society core observes the population average
   every tick and advises its citizens, so personal policies coordinate around
   society-wide crowding, food security, construction and conflict pressure.
@@ -80,18 +86,19 @@ only changes what you see. Close the window to finish the experiment.
 
 This is a compact artificial-life society, with authored physical and social
 rules and learned individual decisions. It does not simulate language, formal
-governments or a full human economy. It has no victory condition: survival,
+governments, currency or market prices. It has no victory condition: survival,
 growth, conflict and extinction are outcomes to observe.
 
 ## What the AI actually does
 
-Every civilization trains its own **society core** (82 → 2048 → 2560 → 2560 →
-12, **12,002,316 parameters**) from its world seed, so different seeds produce
+Every civilization trains its own **society core** (92 → 2048 → 2560 → 2560 →
+13, **12,025,357 parameters**) from its world seed, so different seeds produce
 genuinely different collective instincts. Each tick it reads the live
-population-average observation and returns twelve advisory signals. Each citizen
-appends those signals to its own 82 live observations (its body and supplies,
+population-average observation and returns thirteen advisory signals. Each citizen
+appends those signals to its own 92 live observations (its body and supplies,
 local terrain and resources, reachable world features, nearby social conditions,
-and longer-running world context), and its personal **94 → 56 → 28 → 12**
+longer-running world context, clan reserve and courier context), and its personal
+**105 → 56 → 28 → 13**
 network learns with online backpropagation. Every intention comes from neural
 action values or exploratory sampling of physically legal actions. The
 simulation executes movement and interactions and returns a reward; the citizen
@@ -123,9 +130,10 @@ are identical whether it runs with one thread or many.
 
 Headless output is a JSON summary including the selected terrain shape,
 dimensions and advisor cadence, population, births, deaths, construction,
-neural decisions, learning updates, the worker count and a reproducibility
-digest. The optional JSONL event log contains every recorded event, its tick,
-coordinates, category, text and score. The desktop keeps a
+storehouses, food and wood reserves, deliveries, neural decisions, learning
+updates, the worker count and a reproducibility digest. The optional JSONL event
+log contains every recorded event, its tick, coordinates, category, text and
+score. The desktop keeps a
 bounded recent journal in memory. An event's importance is separate from neural
 action values or learning rewards.
 
@@ -166,20 +174,20 @@ cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 ```
 
-Tests cover 82 finite normalized observations across individual and world
-change, a high-index sensor that changes learned action values, deeper neural
-learning and decision changes, legal action masking, inheritance and cultural
-imitation, five-tick timing with retained frame debt, seeded determinism,
-autonomous construction and births, all five terrain shapes and world-size
-presets, the emergent disease, fire-succession and transmission mechanics,
-deterministic civilisation territory and its visible borders, resource and
-population invariants, event scores, and extreme starting conditions. The
-society-core constructor is asserted to be over ten million parameters, its
-training is deterministic across identical seeds, and a dedicated check proves
-per-citizen policies react to the advisory channels. The interface smoke test
-injects setup and observation controls, including shape and size selection, and
-compares the resulting world with an unattended simulation to detect accidental
-player influence.
+Tests cover 92 finite normalized observations across individual, world and
+economy change, a high-index sensor that changes learned action values, deeper
+neural learning and decision changes, legal action masking, inheritance and
+cultural imitation, five-tick timing with retained frame debt, seeded
+determinism, autonomous construction, births and shared storehouses, all five
+terrain shapes and world-size presets, the emergent disease, fire-succession and
+transmission mechanics, deterministic civilisation territory and its visible
+borders, resource and population invariants, event scores, and extreme starting
+conditions. The society-core constructor is asserted to be over ten million
+parameters, its training is deterministic across identical seeds, and a
+dedicated check proves per-citizen policies react to advisory channels. The
+interface smoke test exercises setup, the guide, layers and the pausing observer
+menu, then compares the resulting world with an unattended simulation to detect
+accidental player influence.
 
 The CI workflow runs macOS and Linux builds, plus an address/undefined-behaviour
 sanitizer build. See [verification evidence](docs/VERIFICATION.md).

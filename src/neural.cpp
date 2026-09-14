@@ -112,6 +112,15 @@ Values curriculum(const Observation& x) {
     const float neighbourSocialNeed = x[67];
     const float sameClan = x[68];
     const float differentClan = x[69];
+    const float reserveFood = x[83];
+    const float reserveWood = x[84];
+    const float storeCoverage = x[85];
+    const float storeNear = x[86];
+    const float onStore = x[87];
+    const float foodStoreSpace = x[88];
+    const float woodStoreSpace = x[89];
+    const float logisticsSkill = x[90];
+    const float nearbyNeed = x[91];
 
     const float needs = std::max({hunger, thirst, fatigue, healthDeficit * .85f});
     const float scarcity = 1.0f - foodSecurity;
@@ -170,6 +179,13 @@ Values curriculum(const Observation& x) {
         .31f * differentClan * (1.0f - neighbourCooperation) + .22f * neighbourFood * scarcity +
         .16f * localAggression * company - .78f * cooperation - .24f * communityCooperation -
         .18f * wellbeing + .05f * prior(x, Action::Attack);
+    const float storedProvision = .55f * reserveFood + .45f * reserveWood;
+    const float carryingSurplus = unit(.62f * food + .38f * wood);
+    const float storeSpace = std::max(foodStoreSpace, woodStoreSpace);
+    q[static_cast<int>(Action::Haul)] = -.72f + .82f * storeNear + .52f * onStore +
+        .68f * carryingSurplus * storeSpace + .46f * nearbyNeed * reserveFood +
+        .20f * storeCoverage + .17f * logisticsSkill + .12f * storedProvision -
+        .46f * needs - .38f * fireRisk + .06f * prior(x, Action::Haul);
     for (float& value : q) value = std::clamp(value, -3.5f, 3.5f);
     return q;
 }
@@ -188,8 +204,7 @@ Observation founderObservation(std::mt19937& rng, int sample) {
     x[37] = x[38] = x[39] = x[40] = 0.0f;
     const int terrain = static_cast<int>(rng() % 4);
     x[37 + terrain] = 1.0f;
-    x[70] = x[71] = x[72] = x[73] = x[74] = x[75] = 0.0f;
-    x[76] = x[77] = x[78] = x[79] = x[80] = x[81] = 0.0f;
+    for (int action = 0; action < ActionCount; ++action) x[70 + action] = 0.0f;
     x[70 + static_cast<int>(rng() % ActionCount)] = 1.0f;
 
     // Couple broad measurements to nearby measurements so the network sees
@@ -221,12 +236,20 @@ Observation founderObservation(std::mt19937& rng, int sample) {
     for (int i = 63; i <= 67; ++i) x[i] = sampleUnit(rng) < neighbourChance ? sampleUnit(rng) : 0.0f;
     x[68] = sampleUnit(rng) < neighbourChance ? sampleUnit(rng) : 0.0f;
     x[69] = sampleUnit(rng) < neighbourChance ? sampleUnit(rng) : 0.0f;
+    x[83] = unit(.60f * x[24] + .40f * sampleUnit(rng));
+    x[84] = unit(.42f * x[6] + .58f * sampleUnit(rng));
+    x[85] = unit(.55f * x[22] + .45f * sampleUnit(rng));
+    x[86] = sampleUnit(rng) < x[85] ? sampleUnit(rng) : 0.0f;
+    x[87] = sampleUnit(rng) < x[86] ? 1.0f : 0.0f;
+    x[88] = 1.0f - x[83];
+    x[89] = 1.0f - x[84];
+    x[90] = sampleUnit(rng);
+    x[91] = unit(.55f * x[0] + .25f * x[3] + .20f * sampleUnit(rng));
 
     // Repeated archetypes make rare but important choices observable during a
     // small bootstrap without replacing the broad background data above.
     const int scenario = sample % ActionCount;
-    x[70] = x[71] = x[72] = x[73] = x[74] = x[75] = 0.0f;
-    x[76] = x[77] = x[78] = x[79] = x[80] = x[81] = 0.0f;
+    for (int action = 0; action < ActionCount; ++action) x[70 + action] = 0.0f;
     x[70 + scenario] = 1.0f;
     switch (scenario) {
     case static_cast<int>(Action::Wander):
@@ -253,6 +276,9 @@ Observation founderObservation(std::mt19937& rng, int sample) {
         x[18] = .98f; x[5] = .72f; x[24] = x[25] = .80f; x[68] = .90f; x[21] = .22f; break;
     case static_cast<int>(Action::Attack):
         x[8] = x[50] = x[61] = .90f; x[69] = x[62] = .85f; x[65] = .12f; x[66] = .84f; break;
+    case static_cast<int>(Action::Haul):
+        x[5] = .82f; x[6] = .66f; x[83] = .28f; x[84] = .18f; x[85] = .55f;
+        x[86] = x[87] = .92f; x[88] = .72f; x[89] = .82f; x[90] = .45f; x[91] = .62f; break;
     }
     return x;
 }
@@ -270,7 +296,7 @@ BrainInput compose(const Observation& observation, const Values& advice) {
 const char* actionName(Action action) {
     static constexpr const char* names[ActionCount] = {
         "WANDER", "GATHER", "EAT", "DRINK", "REST", "CHOP",
-        "BUILD", "FARM", "SHARE", "SOCIALIZE", "REPRODUCE", "ATTACK"
+        "BUILD", "FARM", "SHARE", "SOCIALIZE", "REPRODUCE", "ATTACK", "HAUL"
     };
     const int index = static_cast<int>(action);
     return index >= 0 && index < ActionCount ? names[index] : "UNKNOWN";
@@ -296,7 +322,7 @@ SocietyCore::SocietyCore(std::uint32_t seed) {
 SocietyCore::ForwardPass SocietyCore::forward(const CoreInput& society) const {
     ForwardPass pass;
     pass.input = normalized(society);
-    // The twelve-million-parameter core is by far the widest network in the
+    // The twelve-million-plus-parameter core is by far the widest network in the
     // simulation, so its hidden layers are worth splitting across the worker
     // pool. Every output unit is an independent dot product that reads only
     // the previous activations and its own weight row, so the row partition is
@@ -350,7 +376,7 @@ float SocietyCore::train(const CoreInput& society, const Values& targets, float 
         const float target = std::isfinite(targets[a]) ? std::clamp(targets[a], -4.0f, 4.0f) : 0.0f;
         const float error = pass.raw[a] - target;
         loss += error * error;
-        // Mean squared error across all twelve advisory outputs keeps the
+        // Mean squared error across all thirteen advisory outputs keeps the
         // shared hidden gradients comparable to one citizen TD update.
         outputDelta[a] = std::clamp(error, -GradientLimit, GradientLimit) /
             static_cast<float>(ActionCount);
@@ -734,7 +760,7 @@ Brain makeFounderBrain(std::uint32_t seed, const SocietyCore& core) {
         adviceSet[palette] = core.advise(mean);
     }
     // 1,536 compact, stratified samples are trained twice. Each optimizer step
-    // fits all 12 values from a single forward pass, avoiding the former
+    // fits all 13 values from a single forward pass, avoiding the former
     // 96,000 separate forward/backward passes while retaining broad coverage.
     constexpr int SamplesPerPass = 1536;
     for (int pass = 0; pass < 2; ++pass) {

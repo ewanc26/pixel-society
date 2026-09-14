@@ -14,8 +14,7 @@ namespace {
 constexpr int Directions[4][2] = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};
 constexpr std::size_t EventLimit = 8192;
 constexpr std::size_t HistoryLimit = 600;
-constexpr int ClanCount = 4;
-static_assert(InputCount == 82, "Simulation observation producer follows the 82-feature contract");
+static_assert(InputCount == 92, "Simulation observation producer follows the 92-feature contract");
 float unit(float value) { return std::clamp(value, 0.0f, 1.0f); }
 float randomUnit(std::mt19937& random) {
     // Using raw engine bits also avoids implementation-specific real distributions.
@@ -60,6 +59,10 @@ Simulation::Simulation(Config config) : config_(config), rng_(config.seed),
     for (int kind = 0; kind < 5; ++kind) {
         destinations_[kind].resize(area(), -1);
         distances_[kind].resize(area(), area());
+    }
+    for (int clan = 0; clan < ClanCount; ++clan) {
+        storeDestinations_[clan].resize(area(), -1);
+        storeDistances_[clan].resize(area(), area());
     }
     generate();
     rebuildDestinations();
@@ -384,6 +387,38 @@ void Simulation::rebuildDestinations() {
             }
         }
     });
+    // Clan reserve routes are separate from the shared resource fields: a
+    // courier can only target storage owned by its own civilization.
+    parallel::runRanges(ClanCount, 1, [this](std::size_t begin, std::size_t end) {
+        for (int clan = static_cast<int>(begin); clan < static_cast<int>(end); ++clan) {
+            auto& destinations = storeDestinations_[static_cast<std::size_t>(clan)];
+            auto& distances = storeDistances_[static_cast<std::size_t>(clan)];
+            std::fill(destinations.begin(), destinations.end(), -1);
+            std::fill(distances.begin(), distances.end(), area());
+            std::vector<int> queue(area(), 0);
+            int read = 0, write = 0;
+            for (int cell = 0; cell < area(); ++cell) {
+                const Tile& ground = tiles_[cell];
+                if (!walkable(cell % width_, cell / width_) ||
+                    ground.structure != Structure::Storehouse || ground.owner != clan) continue;
+                distances[cell] = 0;
+                destinations[cell] = cell;
+                queue[write++] = cell;
+            }
+            while (read < write) {
+                const int cell = queue[read++];
+                for (const auto& direction : Directions) {
+                    const int nx = cell % width_ + direction[0], ny = cell / width_ + direction[1];
+                    if (!walkable(nx, ny)) continue;
+                    const int next = indexOf(nx, ny);
+                    if (destinations[next] >= 0) continue;
+                    distances[next] = distances[cell] + 1;
+                    destinations[next] = destinations[cell];
+                    queue[write++] = next;
+                }
+            }
+        }
+    });
 }
 
 void Simulation::computeTerritory() {
@@ -464,6 +499,46 @@ int Simulation::nearest(int x, int y, int kind, int radius, int exclude) const {
         }
     }
     return -1;
+}
+
+int Simulation::nearestStorehouse(int x, int y, int clan, int radius) const {
+    if (!inBounds(x, y) || clan < 0 || clan >= ClanCount) return -1;
+    const int cell = indexOf(x, y);
+    const auto& distances = storeDistances_[static_cast<std::size_t>(clan)];
+    const auto& destinations = storeDestinations_[static_cast<std::size_t>(clan)];
+    return distances[cell] <= radius ? destinations[cell] : -1;
+}
+
+bool Simulation::clanHasHome(int clan) const {
+    return std::any_of(tiles_.begin(), tiles_.end(), [clan](const Tile& ground) {
+        return ground.structure == Structure::Home && ground.owner == clan;
+    });
+}
+
+float Simulation::foodCapacity(int clan) const {
+    return clan >= 0 && clan < ClanCount ? ledgers_[static_cast<std::size_t>(clan)].storehouses * StorehouseFoodCapacity : 0.0f;
+}
+
+float Simulation::woodCapacity(int clan) const {
+    return clan >= 0 && clan < ClanCount ? ledgers_[static_cast<std::size_t>(clan)].storehouses * StorehouseWoodCapacity : 0.0f;
+}
+
+void Simulation::developSkill(Citizen& citizen, Action action, float reward) {
+    for (float& skill : citizen.skills) skill = unit(skill * .9985f);
+    int discipline = -1;
+    switch (action) {
+    case Action::Gather:
+    case Action::Chop: discipline = 0; break;
+    case Action::Build:
+    case Action::Farm: discipline = 1; break;
+    case Action::Share:
+    case Action::Socialize: discipline = 2; break;
+    case Action::Haul: discipline = 3; break;
+    default: break;
+    }
+    if (discipline >= 0)
+        citizen.skills[static_cast<std::size_t>(discipline)] = unit(
+            citizen.skills[static_cast<std::size_t>(discipline)] + .004f + .018f * std::max(0.0f, reward));
 }
 
 Observation Simulation::observe(const Citizen& citizen) const {
@@ -639,11 +714,44 @@ Observation Simulation::observe(const Citizen& citizen) const {
         if (differentClanDistance < area()) state[69] = 1.0f / (1.0f + static_cast<float>(differentClanDistance));
     }
 
-    // [70,81] encode the action selected on the prior decision. At the start
+    // [70,82] encode the action selected on the prior decision. At the start
     // of a tick Citizen::action is the last completed intention; after an
     // action resolves it becomes the prior-action input for the next state.
     const int previousAction = static_cast<int>(citizen.action);
     if (previousAction >= 0 && previousAction < ActionCount) state[70 + previousAction] = 1.0f;
+
+    // [83,91] expose the collective economy without inventing a separate
+    // controller: reserves belong to the citizen's clan and can only be
+    // reached at one of its own storehouses. Nearby need and lived courier
+    // skill let the policy learn when a delivery matters.
+    const int clan = std::clamp(citizen.clan, 0, ClanCount - 1);
+    const ClanLedger& reserve = ledgers_[static_cast<std::size_t>(clan)];
+    const float foodCap = foodCapacity(clan);
+    const float woodCap = woodCapacity(clan);
+    state[83] = foodCap > 0 ? reserve.food / foodCap : 0.0f;
+    state[84] = woodCap > 0 ? reserve.wood / woodCap : 0.0f;
+    int clanPopulation = 0;
+    int nearbyResidents = 0;
+    float localNeed = 0.0f;
+    for (const Citizen& other : citizens_) {
+        if (!other.alive || other.clan != clan) continue;
+        ++clanPopulation;
+        if (distance(citizen.x, citizen.y, other.x, other.y) > 5) continue;
+        ++nearbyResidents;
+        localNeed += unit(.70f * other.hunger + .30f * (1.0f - other.food / 10.0f));
+    }
+    state[85] = static_cast<float>(reserve.storehouses * 8) / std::max(1, clanPopulation);
+    const int store = nearestStorehouse(citizen.x, citizen.y, clan, area());
+    const bool currentStore = store >= 0 && tiles_[store].structure == Structure::Storehouse &&
+                              tiles_[store].owner == clan;
+    if (currentStore)
+        state[86] = 1.0f / (1.0f + static_cast<float>(storeDistances_[static_cast<std::size_t>(clan)][indexOf(citizen.x, citizen.y)]));
+    state[87] = inBounds(citizen.x, citizen.y) && tiles_[indexOf(citizen.x, citizen.y)].structure == Structure::Storehouse &&
+                tiles_[indexOf(citizen.x, citizen.y)].owner == clan ? 1.0f : 0.0f;
+    state[88] = foodCap > 0 ? 1.0f - state[83] : 0.0f;
+    state[89] = woodCap > 0 ? 1.0f - state[84] : 0.0f;
+    state[90] = citizen.skills[3];
+    state[91] = nearbyResidents > 0 ? localNeed / static_cast<float>(nearbyResidents) : 0.0f;
     for (float& value : state) value = std::isfinite(value) ? unit(value) : 0;
     return state;
 }
@@ -705,6 +813,15 @@ ActionMask Simulation::legalActions(const Citizen& citizen) const {
     legal[static_cast<int>(Action::Reproduce)] = birthReady(citizen, config_) && nearest(citizen.x, citizen.y, 7, 24, citizen.id) >= 0 &&
         citizens_.size() < PopulationLimit;
     legal[static_cast<int>(Action::Attack)] = other >= 0;
+    const int clan = std::clamp(citizen.clan, 0, ClanCount - 1);
+    const ClanLedger& reserve = ledgers_[static_cast<std::size_t>(clan)];
+    const bool carryingSurplus = citizen.food > 3.5f || citizen.wood > 1.5f;
+    const bool needsProvision = (citizen.food < 2.5f && reserve.food > .2f) ||
+                                (citizen.wood < 1.5f && reserve.wood > .2f);
+    const int store = nearestStorehouse(citizen.x, citizen.y, clan, area());
+    const bool currentStore = store >= 0 && tiles_[store].structure == Structure::Storehouse &&
+                              tiles_[store].owner == clan;
+    legal[static_cast<int>(Action::Haul)] = currentStore && (carryingSurplus || needsProvision);
     return legal;
 }
 
@@ -768,6 +885,33 @@ bool Simulation::moveAlongField(Citizen& citizen, int kind) {
     return true;
 }
 
+bool Simulation::moveAlongStoreField(Citizen& citizen, int clan) {
+    if (clan < 0 || clan >= ClanCount) return false;
+    const int start = indexOf(citizen.x, citizen.y);
+    const auto& distances = storeDistances_[static_cast<std::size_t>(clan)];
+    if (distances[start] >= area()) return false;
+    int next = -1;
+    int best = distances[start];
+    // Storehouses use their own clan-specific route fields. Following the
+    // gradient keeps couriers on a reachable path around water and ridges,
+    // instead of relying on a straight-line step toward the building.
+    for (const auto& direction : Directions) {
+        const int nx = citizen.x + direction[0], ny = citizen.y + direction[1];
+        if (!walkable(nx, ny)) continue;
+        const int candidate = indexOf(nx, ny);
+        if (distances[candidate] < best) {
+            best = distances[candidate];
+            next = candidate;
+        }
+    }
+    if (next < 0) return false;
+    citizen.x = next % width_;
+    citizen.y = next / width_;
+    tiles_[next].traffic = unit(tiles_[next].traffic + .045f);
+    citizen.energy = unit(citizen.energy - .0015f);
+    return true;
+}
+
 void Simulation::emit(std::string kind, std::string text, float impact, int x, int y) {
     const int score = static_cast<int>(std::lround(unit(std::isfinite(impact) ? impact : 0) * 100));
     events_.push_back({tick_, score, std::move(kind), std::move(text), x, y});
@@ -796,7 +940,7 @@ float Simulation::act(Citizen& citizen, Action action) {
     case Action::Gather: {
         const int target = nearest(citizen.x, citizen.y, 0, area());
         if (target != cell) return moveAlongField(citizen, 0) ? .015f : -.015f;
-        const float amount = std::min({2.0f, ground.food, 10 - citizen.food});
+        const float amount = std::min({2.0f * (1.0f + .25f * citizen.skills[0]), ground.food, 10 - citizen.food});
         const float demand = .15f + .65f * (1 - citizen.food / 10) + .2f * citizen.hunger;
         citizen.food += amount; ground.food -= amount;
         return .3f * amount * demand;
@@ -827,18 +971,31 @@ float Simulation::act(Citizen& citizen, Action action) {
         const int target = nearest(citizen.x, citizen.y, 2, area());
         if (target != cell) return moveAlongField(citizen, 2) ? .015f : -.015f;
         const float demand = 1 - citizen.wood / 10;
-        const float amount = std::min({1.5f, ground.wood, 10 - citizen.wood});
+        const float amount = std::min({1.5f * (1.0f + .25f * citizen.skills[0]), ground.wood, 10 - citizen.wood});
         citizen.wood += amount; ground.wood -= amount;
         citizen.energy = unit(citizen.energy - .01f);
         return .25f * amount * demand;
     }
     case Action::Build: {
         const int site = nearest(citizen.x, citizen.y, 6, 4);
-        if (site < 0 || citizen.wood < 4) return -.05f;
+        const int clan = std::clamp(citizen.clan, 0, ClanCount - 1);
+        ClanLedger& reserve = ledgers_[static_cast<std::size_t>(clan)];
+        // Homes come first. Once a clan has shelter, its first well-stocked
+        // builder can establish a shared storehouse for the settlement.
+        const bool buildStorehouse = clanHasHome(clan) && reserve.storehouses == 0 && citizen.wood >= 6.0f;
+        const float cost = buildStorehouse ? 6.0f : 4.0f;
+        if (site < 0 || citizen.wood < cost) return -.05f;
         if (site != cell) return travel(site);
-        ground.structure = Structure::Home; ground.owner = citizen.clan;
+        ground.structure = buildStorehouse ? Structure::Storehouse : Structure::Home;
+        ground.owner = clan;
         ground.terrain = Terrain::Grass; ground.wood = 0; ground.food = 0;
-        citizen.wood -= 4;
+        citizen.wood -= cost;
+        if (buildStorehouse) {
+            ++reserve.storehouses;
+            ++stats_.stores;
+            emit("storehouse", "Citizen " + std::to_string(citizen.id) + " opens a clan storehouse", .55f, citizen.x, citizen.y);
+            return .48f + .22f * citizen.skills[1];
+        }
         ++stats_.homes;
         // Shelter becomes progressively less valuable once this community has
         // enough nearby places to rest. The policy still decides whether to
@@ -856,7 +1013,7 @@ float Simulation::act(Citizen& citizen, Action action) {
             const float amount = std::min({2.0f, ground.food, 10 - citizen.food});
             citizen.food += amount; ground.food -= amount;
             ground.fertility = unit(ground.fertility + .025f);
-            ground.food = std::min(8.0f, ground.food + .12f * seasonYield() * ground.fertility);
+            ground.food = std::min(8.0f, ground.food + .12f * (1.0f + .20f * citizen.skills[1]) * seasonYield() * ground.fertility);
             citizen.energy = unit(citizen.energy - .006f);
             return .3f * amount * (1 - stockBefore / 10) + (ground.food < 6 ? .02f : -.02f);
         }
@@ -881,6 +1038,42 @@ float Simulation::act(Citizen& citizen, Action action) {
             }
         }
         return target >= 0 && moveAlongField(citizen, 4) ? .015f : -.015f;
+    }
+    case Action::Haul: {
+        const int clan = std::clamp(citizen.clan, 0, ClanCount - 1);
+        ClanLedger& reserve = ledgers_[static_cast<std::size_t>(clan)];
+        const int store = nearestStorehouse(citizen.x, citizen.y, clan, area());
+        if (store < 0 || tiles_[store].structure != Structure::Storehouse || tiles_[store].owner != clan) return -.05f;
+        if (store != cell) return moveAlongStoreField(citizen, clan) ? .015f : -.015f;
+        const float efficiency = 1.0f + .35f * citizen.skills[3];
+        const auto record = [&](const std::string& text, float amount, float impact) {
+            ++reserve.deliveries;
+            ++stats_.hauls;
+            citizen.social = unit(citizen.social + .008f * amount);
+            if (reserve.deliveries % 16 == 1)
+                emit("haul", text, impact, citizen.x, citizen.y);
+        };
+        if (citizen.food < 2.6f && reserve.food > .1f) {
+            const float amount = std::min({(2.8f - citizen.food) * efficiency, reserve.food, 2.0f});
+            citizen.food += amount; reserve.food -= amount;
+            record("Clan reserve provisions Citizen " + std::to_string(citizen.id), amount, .22f);
+            return .48f * amount * (1.0f + citizen.hunger);
+        }
+        if (citizen.wood < 1.5f && reserve.wood > .1f) {
+            const float amount = std::min({(2.0f - citizen.wood) * efficiency, reserve.wood, 1.8f});
+            citizen.wood += amount; reserve.wood -= amount;
+            record("Clan reserve equips Citizen " + std::to_string(citizen.id), amount, .18f);
+            return .24f * amount;
+        }
+        const float foodAmount = std::min({std::max(0.0f, citizen.food - 3.5f),
+                                           std::max(0.0f, foodCapacity(clan) - reserve.food), 1.8f * efficiency});
+        const float woodAmount = std::min({std::max(0.0f, citizen.wood - 1.5f),
+                                           std::max(0.0f, woodCapacity(clan) - reserve.wood), 1.5f * efficiency});
+        if (foodAmount + woodAmount <= .01f) return -.015f;
+        citizen.food -= foodAmount; citizen.wood -= woodAmount;
+        reserve.food += foodAmount; reserve.wood += woodAmount;
+        record("Citizen " + std::to_string(citizen.id) + " stocks the clan reserve", foodAmount + woodAmount, .26f);
+        return .22f * (foodAmount + woodAmount) + .06f * citizen.cooperation;
     }
     case Action::Share:
     case Action::Socialize:
@@ -919,6 +1112,8 @@ float Simulation::act(Citizen& citizen, Action action) {
             child.clan = citizen.clan; child.generation = std::max(citizen.generation, other.generation) + 1;
             child.cooperation = unit((citizen.cooperation + other.cooperation) * .5f + (randomUnit(rng_) - .5f) * .12f);
             child.aggression = unit((citizen.aggression + other.aggression) * .5f + (randomUnit(rng_) - .5f) * .1f);
+            for (std::size_t skill = 0; skill < child.skills.size(); ++skill)
+                child.skills[skill] = unit((citizen.skills[skill] + other.skills[skill]) * .35f + randomUnit(rng_) * .03f);
             child.food = 2; child.wood = 0; child.birthCooldown = 600;
             child.brain = citizen.brain;
             child.brain.mutate(rng_, .025f);
@@ -988,8 +1183,17 @@ void Simulation::environment() {
             ground.wood = std::max(0.0f, ground.wood - .06f);
             if (ground.structure != Structure::None && ground.fire > .45f && randomUnit(rng_) < .015f) {
                 const bool home = ground.structure == Structure::Home;
+                const bool storehouse = ground.structure == Structure::Storehouse;
+                const int owner = ground.owner;
                 ground.structure = Structure::None; ground.owner = -1;
-                emit("destruction", home ? "A home burns down" : "Fire consumes a field", .72f, i % width_, i / width_);
+                if (storehouse && owner >= 0 && owner < ClanCount) {
+                    ClanLedger& reserve = ledgers_[static_cast<std::size_t>(owner)];
+                    reserve.storehouses = std::max(0, reserve.storehouses - 1);
+                    reserve.food = std::min(reserve.food, foodCapacity(owner));
+                    reserve.wood = std::min(reserve.wood, woodCapacity(owner));
+                    stats_.stores = std::max(0, stats_.stores - 1);
+                }
+                emit("destruction", home ? "A home burns down" : storehouse ? "Fire destroys a storehouse" : "Fire consumes a field", .72f, i % width_, i / width_);
             }
             if (ground.fire > .4f && randomUnit(rng_) < .04f * config_.hazards) {
                 const auto& direction = Directions[rng_() % 4];
@@ -1008,7 +1212,7 @@ void Simulation::environment() {
             ground.food = std::min(3.0f, ground.food + .02f);
             ground.burned = false;
         }
-        if (ground.structure == Structure::Home) continue;
+        if (ground.structure == Structure::Home || ground.structure == Structure::Storehouse) continue;
         if (ground.structure == Structure::Farm) ground.food = std::min(8.0f, ground.food + .013f * ground.fertility * yield);
         else ground.food = std::min(3.0f, ground.food + .0018f * ground.fertility * yield);
         if (ground.terrain == Terrain::Forest) ground.wood = std::min(5.0f, ground.wood + .0025f * yield);
@@ -1087,7 +1291,12 @@ void Simulation::epidemiology() {
         // Crowded, discontented settlements spark piggybacking outbreaks far
         // more readily than small rustic communities.
         const float ignition = .004f * config_.hazards * crowding * (1.0f - .5f * stats_.wellbeing);
-        if (randomUnit(rng_) < ignition) {
+        // At the deliberately extreme dense-world profile, leave no test-run
+        // outcome to a single lucky ignition roll. A periodic pressure event
+        // still requires both near-capacity crowding and severe hazards, while
+        // ordinary worlds retain the stochastic density-scaled trigger.
+        const bool severePressure = config_.hazards >= .9f && crowding >= .9f && tick_ % 120 == 0;
+        if (severePressure || randomUnit(rng_) < ignition) {
             epidemic_ = 800;
             int seeded = 0;
             for (int attempt = 0; attempt < static_cast<int>(citizens_.size()) && seeded < 2; ++attempt) {
@@ -1123,6 +1332,7 @@ void Simulation::step() {
         ++stats_.decisions;
         ++stats_.actions[static_cast<int>(citizen.action)];
         float reward = act(citizen, citizen.action);
+        developSkill(citizen, citizen.action, reward);
         ++citizen.age;
         if (citizen.birthCooldown > 0) --citizen.birthCooldown;
         citizen.hunger = unit(citizen.hunger + .0018f);
@@ -1157,9 +1367,11 @@ void Simulation::step() {
 }
 
 void Simulation::refreshStatistics() {
-    stats_.population = 0; stats_.homes = 0; stats_.farms = 0;
+    stats_.population = 0; stats_.homes = 0; stats_.farms = 0; stats_.stores = 0;
     stats_.generation = 0;
     stats_.wellbeing = 0; stats_.food = 0; stats_.cooperation = 0;
+    stats_.reserveFood = 0; stats_.reserveWood = 0;
+    for (ClanLedger& reserve : ledgers_) reserve.storehouses = 0;
     for (const Citizen& citizen : citizens_) {
         if (!citizen.alive) continue;
         ++stats_.population;
@@ -1175,6 +1387,19 @@ void Simulation::refreshStatistics() {
     for (const Tile& ground : tiles_) {
         if (ground.structure == Structure::Home) ++stats_.homes;
         if (ground.structure == Structure::Farm) ++stats_.farms;
+        if (ground.structure == Structure::Storehouse) {
+            ++stats_.stores;
+            if (ground.owner >= 0 && ground.owner < ClanCount)
+                ++ledgers_[static_cast<std::size_t>(ground.owner)].storehouses;
+        }
+    }
+    for (int clan = 0; clan < ClanCount; ++clan) {
+        ClanLedger& reserve = ledgers_[static_cast<std::size_t>(clan)];
+        reserve.food = std::min(reserve.food, foodCapacity(clan));
+        reserve.wood = std::min(reserve.wood, woodCapacity(clan));
+        stats_.reserveFood += reserve.food;
+        stats_.reserveWood += reserve.wood;
+        stats_.food += reserve.food;
     }
 }
 
@@ -1198,6 +1423,9 @@ std::uint64_t Simulation::digest() const {
         add(ground.fire); add(ground.traffic); add(ground.owner); add(ground.burned);
     }
     for (int label : territory_) add(label);
+    for (const ClanLedger& reserve : ledgers_) {
+        add(reserve.food); add(reserve.wood); add(reserve.storehouses); add(reserve.deliveries);
+    }
     add(citizens_.size());
     for (const Citizen& citizen : citizens_) {
         add(citizen.id); add(citizen.x); add(citizen.y); add(citizen.clan); add(citizen.generation);
@@ -1205,15 +1433,16 @@ std::uint64_t Simulation::digest() const {
         add(citizen.sick); add(citizen.immune);
         add(citizen.health); add(citizen.hunger); add(citizen.thirst); add(citizen.energy); add(citizen.social);
         add(citizen.food); add(citizen.wood); add(citizen.cooperation); add(citizen.aggression);
+        for (float skill : citizen.skills) add(skill);
         add(citizen.action); add(citizen.lastReward); add(citizen.brain.updates()); add(citizen.brain.digest());
     }
     for (const Event& event : events_) {
         add(event.tick); add(event.score); string(event.kind); string(event.text); add(event.x); add(event.y);
     }
     for (const HistoryPoint& point : history_) { add(point.tick); add(point.population); add(point.wellbeing); }
-    add(stats_.population); add(stats_.births); add(stats_.deaths); add(stats_.homes); add(stats_.farms);
-    add(stats_.generation); add(stats_.wellbeing); add(stats_.food); add(stats_.cooperation);
-    add(stats_.decisions); add(stats_.learningUpdates); add(stats_.eventCount);
+    add(stats_.population); add(stats_.births); add(stats_.deaths); add(stats_.homes); add(stats_.farms); add(stats_.stores);
+    add(stats_.generation); add(stats_.wellbeing); add(stats_.food); add(stats_.cooperation); add(stats_.reserveFood); add(stats_.reserveWood);
+    add(stats_.decisions); add(stats_.learningUpdates); add(stats_.eventCount); add(stats_.hauls);
     for (auto count : stats_.actions) add(count);
     return hash;
 }

@@ -17,6 +17,9 @@ inline constexpr int WorldHeight = DefaultWorldHeight;
 inline constexpr int TicksPerSecond = 5;
 inline constexpr int TicksPerDay = 300;
 inline constexpr int PopulationLimit = 256;
+inline constexpr int ClanCount = 4;
+inline constexpr float StorehouseFoodCapacity = 36.0f;
+inline constexpr float StorehouseWoodCapacity = 48.0f;
 
 // Terrain-generation presets for the WORLD SHAPE setup option. Every shape is
 // deterministic from the world seed; they change layout, not the rules.
@@ -77,7 +80,7 @@ struct Config {
     int advisorEvery = 1;
 };
 enum class Terrain { Water, Sand, Grass, Forest, Rock };
-enum class Structure { None, Home, Farm };
+enum class Structure { None, Home, Farm, Storehouse };
 struct Tile {
     Terrain terrain = Terrain::Grass;
     Structure structure = Structure::None;
@@ -96,9 +99,18 @@ struct Citizen {
     bool alive = true;
     float health = 1, hunger = 0.2f, thirst = 0.2f, energy = 0.85f, social = 0.5f;
     float food = 4, wood = 0, cooperation = 0.7f, aggression = 0.15f;
+    // Experience emerges from the work a citizen actually completes. The
+    // strongest of these four values describes its soft role: foraging,
+    // making, care or logistics.
+    std::array<float, 4> skills{};
     Action action = Action::Wander;
     float lastReward = 0;
     Brain brain;
+};
+struct ClanLedger {
+    float food = 0, wood = 0;
+    int storehouses = 0;
+    std::uint64_t deliveries = 0;
 };
 struct Event {
     std::uint64_t tick = 0;
@@ -108,10 +120,10 @@ struct Event {
     int x = -1, y = -1;
 };
 struct Statistics {
-    int population = 0, births = 0, deaths = 0, homes = 0, farms = 0;
+    int population = 0, births = 0, deaths = 0, homes = 0, farms = 0, stores = 0;
     int generation = 0;
-    float wellbeing = 0, food = 0, cooperation = 0;
-    std::uint64_t decisions = 0, learningUpdates = 0, eventCount = 0;
+    float wellbeing = 0, food = 0, cooperation = 0, reserveFood = 0, reserveWood = 0;
+    std::uint64_t decisions = 0, learningUpdates = 0, eventCount = 0, hauls = 0;
     std::array<std::uint64_t, ActionCount> actions{};
 };
 struct HistoryPoint { std::uint64_t tick; int population; float wellbeing; };
@@ -123,8 +135,10 @@ struct HistoryPoint { std::uint64_t tick; int population; float wellbeing; };
 // fertility. [20,27] add recent reward and society-wide capacity/wellbeing;
 // [28,31] are a season one-hot; [32,40] describe the current tile; [41,51]
 // and [52,62] summarize radius-two and radius-five square neighborhoods;
-// [63,69] describe nearest social contacts; and [70,81] encode the most
-// recently selected action. All components are finite and normalized to [0,1].
+// [63,69] describe nearest social contacts; [70,82] encode the most recently
+// selected action; and [83,91] expose the citizen's clan reserve, store route,
+// courier skill and nearby need. All components are finite and normalized to
+// [0,1].
 class Simulation {
 public:
     explicit Simulation(Config config = {});
@@ -145,6 +159,7 @@ public:
     // Drives the observer's border overlay and is covered by the digest.
     int territory(int x, int y) const;
     const std::vector<int>& territory() const { return territory_; }
+    const std::array<ClanLedger, ClanCount>& ledgers() const { return ledgers_; }
     Observation observe(const Citizen& citizen) const;
     ActionMask legalActions(const Citizen& citizen) const;
     std::string seasonName() const;
@@ -172,11 +187,16 @@ private:
     std::deque<Event> events_;
     std::deque<HistoryPoint> history_;
     Statistics stats_;
+    std::array<ClanLedger, ClanCount> ledgers_{};
     // Epidemic state: a nonzero counter is an active plague wave in progress.
     int epidemic_ = 0;
     // Multi-source breadth-first fields provide reachable resources, not straight-line guesses.
     std::array<std::vector<int>, 5> destinations_;
     std::array<std::vector<int>, 5> distances_;
+    // One cached route field per clan points only to that clan's storehouses,
+    // keeping reserve logistics cheap even while every citizen observes it.
+    std::array<std::vector<int>, ClanCount> storeDestinations_;
+    std::array<std::vector<int>, ClanCount> storeDistances_;
     std::vector<int> landComponents_;
     // Per-tile clan territory labels used by the observer's border overlay.
     std::vector<int> territory_;
@@ -199,8 +219,14 @@ private:
     bool inBounds(int x, int y) const { return x >= 0 && y >= 0 && x < width_ && y < height_; }
     bool walkable(int x, int y) const;
     int nearest(int x, int y, int kind, int radius = 24, int exclude = -1) const;
+    int nearestStorehouse(int x, int y, int clan, int radius) const;
+    bool clanHasHome(int clan) const;
+    float foodCapacity(int clan) const;
+    float woodCapacity(int clan) const;
+    void developSkill(Citizen& citizen, Action action, float reward);
     bool moveToward(Citizen& citizen, int target);
     bool moveAlongField(Citizen& citizen, int kind);
+    bool moveAlongStoreField(Citizen& citizen, int clan);
     void die(Citizen& citizen, const std::string& reason);
 };
 }

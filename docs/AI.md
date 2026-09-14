@@ -1,16 +1,16 @@
 # Citizen neural AI
 
 Every civilization owns a trainable **society core**: a C++ feedforward network
-with **82 inputs → 2048 tanh units → 2560 tanh units → 2560 tanh units → 12
+with **92 inputs → 2048 tanh units → 2560 tanh units → 2560 tanh units → 13
 linear outputs**, fitted from that civilization's world seed with a deterministic
-synthetic curriculum. It has **12,002,316 trainable scalar parameters**,
+synthetic curriculum. It has **12,025,357 trainable scalar parameters**,
 including biases. Once per tick it reads the live population-average observation
-vector and returns normalized advisory signals for the twelve intentions.
+vector and returns normalized advisory signals for the thirteen intentions.
 
 Each living citizen owns a smaller trainable personal network:
-**94 inputs → 56 tanh units → 28 tanh units → 12 linear Q values**,
-**7,264 parameters**. The 94 inputs are the citizen's own 82 live observations
-plus the 12 advisory channels from its civilization's core. The personal network
+**105 inputs → 56 tanh units → 28 tanh units → 13 linear Q values**,
+**7,909 parameters**. The 105 inputs are the citizen's own 92 live observations
+plus the 13 advisory channels from its civilization's core. The personal network
 evaluates one set of action values every game tick and learns from the
 consequences of its own selected action.
 
@@ -21,7 +21,7 @@ the simulated world.
 
 ## Observation contract
 
-`InputCount` is 82. Every input is finite and normalized to `[0, 1]`; nonfinite
+`InputCount` is 92. Every input is finite and normalized to `[0, 1]`; nonfinite
 values become zero and values outside the interval are clamped. Indices 0–19
 are retained from the first model so saved simulation assumptions and basic
 survival semantics remain stable.
@@ -41,7 +41,8 @@ survival semantics remain stable.
 | 52–62 | The same eleven measurements across a radius-5 square |
 | 63–67 | Nearest reachable living citizen's hunger, food / 10, cooperation, aggression and social need; all zero when none exists |
 | 68–69 | Proximity to nearest reachable same-clan and different-clan citizen (`1 / (1 + Manhattan distance)`), zero when absent |
-| 70–81 | One-hot previous action: Wander, Gather, Eat, Drink, Rest, Chop, Build, Farm, Share, Socialize, Reproduce, Attack |
+| 70–82 | One-hot previous action: Wander, Gather, Eat, Drink, Rest, Chop, Build, Farm, Share, Socialize, Reproduce, Attack, Haul |
+| 83–91 | Clan food reserve / capacity, clan wood reserve / capacity, storehouse coverage, route proximity to an own-clan storehouse, standing on an own-clan storehouse, free food capacity, free wood capacity, lived logistics skill, and nearby same-clan need |
 
 The radius summaries give a citizen both immediate and neighbourhood-scale data:
 it can distinguish a bare tile within a food-rich settlement from a food-rich
@@ -53,13 +54,14 @@ an intention.
 
 ## Society advisory core
 
-`CoreAdviceCount` is 12, matching one signal per intention. `BrainInputCount`
-is 94 = the 82 observation bits plus 12 advisory channels. By default, each
+`CoreAdviceCount` is 13, matching one signal per intention. `BrainInputCount`
+is 105 = the 92 observation bits plus 13 advisory channels. By default, each
 tick the simulation measures the mean observation vector of the living
 population, runs the society core on that average, clamps each raw output to
-`[-3.5, 3.5]` and rescales to `[0, 1]`, and appends the twelve signals below the
-citizen's own observation bits. `compose(observation, advice)` forms the full
-94-wide brain input used for every choice, learning update and mutation check.
+`[-3.5, 3.5]` and rescales to `[0, 1]`, and appends the thirteen signals below
+the citizen's own observation bits. `compose(observation, advice)` forms the
+full 105-wide brain input used for every choice, learning update and mutation
+check.
 For reproducible long headless experiments, `Config::advisorEvery` can hold the
 latest advisory vector for 1–300 ticks; the normal value is one and the cadence
 is included in the world digest.
@@ -72,13 +74,13 @@ restarted experiment or the observer's reference copy reuses the exact same
 core, and the cache has a bounded size to keep a long-lived process stable.
 Training uses Xavier initialization and a multi-output curriculum of 64 epochs
 over two passes of a tribe-mean sample set at learning rates 0.05 and 0.025,
-fitting all 12 outputs together. Because the core observes the flattened
+fitting all 13 outputs together. Because the core observes the flattened
 population average, its signals let scattered personal policies coordinate
 around society-wide crowding, food security, construction and conflict
 pressure. The core is shared by all of a civilization's citizens and is
 read-only after training; citizens never train it.
 
-The two wide hidden layers dominate the forward pass cost and are split across
+The three wide hidden layers dominate the forward pass cost and are split across
 a fixed-size worker pool set once per process (`Config::threads`, default all
 cores). Each output unit is an independent dot product over its own weight row,
 so the parallel forward pass is bit-for-bit identical to the serial one; the
@@ -88,16 +90,16 @@ parallel and folded in a fixed block order, which keeps the whole simulation
 trace reproducible for any number of threads.
 
 Founder brains are prepared with `makeFounderBrain(seed, core)`. The
-founder curriculum cycles the core over twelve similarly-programmed
+founder curriculum cycles the core over thirteen similarly-programmed
 population-average scenarios so early networks learn to use the advisory
-channels as well as their own 82 sensors. Advisory signals are live state, not
+channels as well as their own 92 sensors. Advisory signals are live state, not
 commands: the personal network still chooses among physically legal actions and
 learns from the outcome of whatever it actually did.
 
 ## Intentions and execution
 
 Outputs are ordered `Wander`, `Gather`, `Eat`, `Drink`, `Rest`, `Chop`, `Build`,
-`Farm`, `Share`, `Socialize`, `Reproduce`, `Attack`. A value is a relative Q
+`Farm`, `Share`, `Socialize`, `Reproduce`, `Attack`, `Haul`. A value is a relative Q
 estimate, not a probability or event score.
 
 The controller chooses epsilon-greedily among physically legal actions: it
@@ -111,6 +113,12 @@ function. Movement, collision, resource use and interactions are world
 mechanics after the neural decision. Choosing Drink may involve several ticks
 of travel, for example, and the brain is evaluated again on every tick.
 
+`Haul` is legal only when a citizen can reach a storehouse owned by its own clan
+and either carries a surplus or needs provisions. A clan-specific breadth-first
+route field moves couriers around water and ridges. At a storehouse, the action
+withdraws food or wood for an understocked citizen; otherwise it deposits the
+citizen's excess into the communal reserve, subject to the building's capacity.
+
 ## Founder preparation and inheritance
 
 `makeFounderBrain(seed, core)` uses Xavier initialization and a compact
@@ -118,13 +126,13 @@ deterministic synthetic curriculum over the founder's own sparse observation
 space, keyed to its civilization core's advisory channels. It creates 3,072 stratified
 observations (two passes of 1,536): ordinary life, scarcity, emergencies,
 construction opportunities, farming, sharing, social contact, reproduction and
-conflict. The examples use the full 82-bit observation layout plus the core's
+conflict and logistics. The examples use the full 92-bit observation layout plus the core's
 advisory signals, including categorical seasons, terrain and prior actions,
 correlated local and global conditions, and deliberately repeated rare
 scenarios.
 
 Each curriculum optimizer step evaluates the deep network once and fits all
-12 output targets together. This multi-output update replaces the old costly
+13 output targets together. This multi-output update replaces the old costly
 per-action bootstrap loop while still giving founders a useful survival and
 settlement prior. Targets reward survival, fire avoidance, resource gathering,
 construction, cultivation, support, social contact and viable reproduction;
@@ -170,10 +178,20 @@ normal-distribution implementations can differ across toolchains.
 
 ## Emergent mechanics
 
-Three research-grounded mechanisms couple the citizen policies to a living,
-disturbance-prone world. All of them are deterministic, run serially on the
-main thread, and add no observation slots, so the 82-feature contract and the
-thread-count-invariant digest are unchanged.
+The collective economy and the environmental mechanics couple citizen policies
+to a living, disturbance-prone world. Their state is deterministic and is folded
+into the thread-count-invariant digest.
+
+### Clan storehouses and learned logistics
+
+Homes are built first. Once a clan has a home, a citizen with six units of wood
+can use its neural `Build` choice to establish that clan's first storehouse. A
+storehouse holds up to 36 food and 48 wood. Each successful delivery develops
+the acting citizen's logistics skill; foraging, construction and care actions
+similarly develop the other three soft work skills. The logistics score directly
+affects handling efficiency and is one of the economy observations. Fire can
+destroy a storehouse, immediately reducing capacity and discarding any reserve
+above what remains.
 
 ### Density-driven disease (SIRS)
 
@@ -181,7 +199,9 @@ Outbreaks follow an SIRS compartment model driven by crowding. Each tick,
 `epidemiology()` computes the settlement's crowding as population ÷ 256 and,
 when no wave is active, rolls an ignition chance scaled by hazard level,
 crowding and wellbeing — a dense, discontented settlement is far more likely
-to kindle a `plague` than a sparse village. When a wave sparks it runs for 800
+to kindle a `plague` than a sparse village. Near population capacity under
+severe hazards, a periodic pressure event guarantees an outbreak rather than
+leaving that extreme ecology to one random roll. When a wave sparks it runs for 800
 ticks and seeds one or two infections. Cases advance deterministically:
 an infected citizen tries to transmit to one physically adjacent neighbour per
 tick with a risk proportional to hazard and crowding; a citizen standing on a
@@ -222,9 +242,8 @@ lower clan index. Recomputing on the same one-second schedule as the route
 maps — serially, on the main thread — keeps the map reproducible for any seed
 and worker count. It is used only by the observer's `BORDERS` layer (a claim
 tint plus bright frontiers between differently claimed or unclaimed regions)
-and folded into the world digest; it adds no observation slots and never
-reaches the citizen networks, so territory is an analytic overlay, not a
-policy input.
+and folded into the world digest; it never reaches the citizen networks, so
+territory is an analytic overlay, not a policy input.
 
 ## Event importance is separate
 

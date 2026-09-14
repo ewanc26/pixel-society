@@ -177,6 +177,8 @@ struct View {
     int selectedId = -1;
     int layer = 0;
     bool help = false;
+    bool menu = false;
+    int menuChoice = 0;
 };
 
 const Citizen* selected(const Simulation& sim, const View& view) {
@@ -200,6 +202,10 @@ void selectAt(const Simulation& sim, View& view, int x, int y) {
 void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
     const bool winter = sim.seasonName() == "Winter" || sim.seasonName() == "WINTER";
     const MapView map = mapView(sim);
+    // Detailed five-pixel sprites look good on Classic and smaller worlds.
+    // At the Large and Huge presets, draw compact single-cell markers instead
+    // so neighboring terrain never gets painted over by a structure sprite.
+    const bool detailed = map.cell >= 5;
     for (int y = 0; y < sim.height(); ++y) {
         for (int x = 0; x < sim.width(); ++x) {
             const auto& tile = sim.tile(x,y);
@@ -215,37 +221,57 @@ void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
             }
             base = blend(base, (noise%3 == 0 ? Cream : Dark),0.035f*static_cast<float>(noise%3));
             out.rect(px,py,map.cell,map.cell,base);
-            if (tile.terrain == Terrain::Water) {
+            if (tile.terrain == Terrain::Water && detailed) {
                 if ((noise+sim.tick()/3)%9 == 0) out.rect(px+1,py+2,3,1,0xff407d8c);
                 if (noise%11 == 0) out.pixel(px,py,0xff4c8793);
-            } else if (tile.terrain == Terrain::Forest && tile.wood > 0.15f) {
+            } else if (tile.terrain == Terrain::Forest && tile.wood > 0.15f && detailed) {
                 out.rect(px+2,py+2,1,3,0xff786c4c);
                 out.rect(px+1,py+1,3,2,0xff245340);
                 out.rect(px+2,py,1,1,0xff81a66d);
                 out.pixel(px+1,py+1,0xff608854);
-            } else if (tile.terrain == Terrain::Rock) {
+            } else if (tile.terrain == Terrain::Rock && detailed) {
                 out.rect(px+1,py+1,3,3,0xff63736d);
                 out.rect(px+1,py+1,2,1,0xff9ba394);
             } else {
-                if (tile.traffic > 0.5f) out.rect(px+1,py+1,3,3,blend(base,0xffad976a,std::min(0.7f,tile.traffic*0.08f)));
-                if (tile.food > 0.4f && noise%3 == 0) out.pixel(px+1,py+2,0xffa2b96c);
-                if (tile.food > 2.0f && noise%4 == 0) out.pixel(px+3,py+3,Gold);
+                if (detailed && tile.traffic > 0.5f) out.rect(px+1,py+1,3,3,blend(base,0xffad976a,std::min(0.7f,tile.traffic*0.08f)));
+                if (detailed && tile.food > 0.4f && noise%3 == 0) out.pixel(px+1,py+2,0xffa2b96c);
+                if (detailed && tile.food > 2.0f && noise%4 == 0) out.pixel(px+3,py+3,Gold);
             }
-            if (view.layer == 1 && tile.terrain != Terrain::Water)
-                out.rect(px+1,py+1,3,3,blend(0xff6e503e,Teal,std::clamp(tile.fertility,0.0f,1.0f)));
+            if (view.layer == 1 && tile.terrain != Terrain::Water) {
+                const Color soil = blend(0xff6e503e,Teal,std::clamp(tile.fertility,0.0f,1.0f));
+                if (detailed) out.rect(px+1,py+1,3,3,soil);
+                else out.rect(px,py,map.cell,map.cell,soil);
+            }
             if (view.layer == 3 && sim.territory(x,y) >= 0)
                 out.rect(px,py,map.cell,map.cell,blend(base,clanColor(sim.territory(x,y)),0.30f));
-            if (tile.structure == Structure::Home) {
+            if (!detailed && tile.structure != Structure::None) {
+                const Color marker = tile.structure == Structure::Home ? Red :
+                                     tile.structure == Structure::Farm ? Gold : 0xffc79255;
+                out.rect(px,py,map.cell,map.cell,marker);
+                if (map.cell >= 2) out.pixel(px+map.cell/2,py+map.cell/2,Cream);
+            } else if (tile.structure == Structure::Home) {
                 out.rect(px+1,py+2,3,3,0xffead6a3);
                 out.rect(px,py+1,5,1,0xffab6552); out.rect(px+1,py,3,1,Red);
                 out.pixel(px+2,py+4,0xff493f37);
             } else if (tile.structure == Structure::Farm) {
                 out.rect(px,py,5,5,0xff6c633f);
                 for (int row = 1; row < 5; row += 2) out.rect(px+1,py+row,3,1,tile.food > 0.5f ? Gold : 0xffb3ab66);
+            } else if (tile.structure == Structure::Storehouse) {
+                // A warm, gold-trimmed crate distinguishes a shared reserve
+                // from homes and fields even on the compact map.
+                out.rect(px,py+2,5,3,0xff816343);
+                out.rect(px+1,py+1,3,1,Gold);
+                out.rect(px+1,py+3,3,1,0xffc79255);
+                out.pixel(px+2,py+4,Dark);
             }
             if (tile.fire > 0) {
-                out.rect(px+1,py+1,3,4,Red); out.rect(px+2,py+2,1,3,Gold);
-                out.pixel(px+1+static_cast<int>(sim.tick()%3),py,Gold);
+                if (detailed) {
+                    out.rect(px+1,py+1,3,4,Red); out.rect(px+2,py+2,1,3,Gold);
+                    out.pixel(px+1+static_cast<int>(sim.tick()%3),py,Gold);
+                } else {
+                    out.rect(px,py,map.cell,map.cell,Red);
+                    out.pixel(px+map.cell/2,py+map.cell/2,Gold);
+                }
             }
         }
     }
@@ -253,19 +279,29 @@ void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
         if (!c.alive) continue;
         const int x = map.x+c.x*map.cell, y = map.y+c.y*map.cell;
         const Color color = view.layer == 1 ? blend(Teal,Red,std::max(c.hunger,c.thirst)) : clanColor(c.clan);
-        if (view.layer == 2) out.frame(x-1,y-1,7,7,color);
-        out.rect(x+1,y+3,3,2,0xff203c37);
-        out.rect(x+1,y+1,2,3,color);
-        out.pixel(x+2,y, Cream);
+        if (detailed) {
+            if (view.layer == 2) out.frame(x-1,y-1,7,7,color);
+            out.rect(x+1,y+3,3,2,0xff203c37);
+            out.rect(x+1,y+1,2,3,color);
+            out.pixel(x+2,y, Cream);
+        } else {
+            if (view.layer == 2) out.frame(x-1,y-1,map.cell+2,map.cell+2,color);
+            out.rect(x,y,map.cell,map.cell,color);
+            if (map.cell >= 2) out.pixel(x+map.cell/2,y,Cream);
+        }
     }
     if (const auto* c = selected(sim,view); c && c->alive) {
         const int x = map.x+c->x*map.cell, y = map.y+c->y*map.cell;
-        // Brackets keep the resident visible, even in crowded settlements.
-        for (int side : {-1,1}) {
-            const int xx = x+2+side*5;
-            out.rect(xx,y-2,1,9,Cream);
-            out.rect(side < 0 ? xx : xx-1,y-2,2,1,Cream);
-            out.rect(side < 0 ? xx : xx-1,y+6,2,1,Cream);
+        if (detailed) {
+            // Brackets keep the resident visible, even in crowded settlements.
+            for (int side : {-1,1}) {
+                const int xx = x+2+side*5;
+                out.rect(xx,y-2,1,9,Cream);
+                out.rect(side < 0 ? xx : xx-1,y-2,2,1,Cream);
+                out.rect(side < 0 ? xx : xx-1,y+6,2,1,Cream);
+            }
+        } else {
+            out.frame(x-1,y-1,map.cell+2,map.cell+2,Cream);
         }
     }
     if (view.layer == 3) {
@@ -328,17 +364,18 @@ void sensorGroup(Canvas& out, int y, const std::string& label, const Observation
              "/"+std::to_string(count),color);
 }
 void drawInspector(Canvas& out, const Simulation& sim, const View& view) {
-    out.rect(512,56,240,224,Panel);
+    out.rect(512,56,240,238,Panel);
     out.text(524,66,"INSIDE A MIND",Teal);
     const auto* c = selected(sim,view);
     if (!c) {
         out.text(524,91,"SELECT A CITIZEN",Cream);
         out.wrap(524,111,"CLICK ANYWHERE ON THE MAP TO FOLLOW THE NEAREST LIVING CITIZEN.",35,3);
         out.text(524,168,"INDIVIDUAL POLICIES ON A",Gold);
-        out.text(524,182,"SOCIETY CORE 82>2048>2560>2560>12",Gold);
+        out.text(524,182,"SOCIETY CORE "+std::to_string(InputCount)+">2048>2560>2560>"+
+                 std::to_string(ActionCount),Gold);
         out.wrap(524,202,std::to_string(InputCount)+" LIVE SENSORS + "+std::to_string(ActionCount)+
                  " ADVISORY CHANNELS. "+std::to_string(HiddenOneCount)+" THEN "+std::to_string(HiddenTwoCount)+
-                 " HIDDEN NEURONS. 12 POSSIBLE ACTIONS. LEARNING AFTER EVERY DECISION.",35,4);
+                 " HIDDEN NEURONS. "+std::to_string(ActionCount)+" POSSIBLE ACTIONS. LEARNING AFTER EVERY DECISION.",35,4);
         return;
     }
     out.text(524,85,"#"+std::to_string(c->id)+" / CLAN "+std::to_string(c->clan+1),clanColor(c->clan));
@@ -354,8 +391,9 @@ void drawInspector(Canvas& out, const Simulation& sim, const View& view) {
     // one-line topology extended beyond the inspector on the right edge.
     out.text(524,145,"LOCAL: "+std::to_string(InputCount)+" SENSORS + "+
              std::to_string(ActionCount)+" ADVICE",Muted);
-    out.text(524,158,"SOCIETY CORE 82>2048>2560>2560>12",Gold);
-    out.text(524,172,"12.0M PARAMS, PER CIVILIZATION",Muted);
+    out.text(524,158,"SOCIETY CORE "+std::to_string(InputCount)+">2048>2560>2560>"+
+             std::to_string(ActionCount),Gold);
+    out.text(524,172,"12.03M PARAMS, PER CIVILIZATION",Muted);
 
     const Observation observation = sim.observe(*c);
     int valid = 0;
@@ -368,9 +406,10 @@ void drawInspector(Canvas& out, const Simulation& sim, const View& view) {
     sensorGroup(out,205,"SOC / TIME",observation,20,12,Teal);
     sensorGroup(out,214,"LOCAL TILE",observation,32,9,0xff91d3e6);
     sensorGroup(out,223,"NEAR FIELDS",observation,41,22,0xffa9d88b);
-    sensorGroup(out,232,"SOCIAL / MEM",observation,63,19,0xffefad7c);
+    sensorGroup(out,232,"SOCIAL / ACT",observation,63,20,0xffefad7c);
+    sensorGroup(out,241,"ECONOMY",observation,83,9,Gold);
     const Color quality = valid == InputCount ? Teal : Red;
-    out.text(524,248,"DATA "+std::to_string(valid)+"/"+std::to_string(InputCount)+
+    out.text(524,255,"DATA "+std::to_string(valid)+"/"+std::to_string(InputCount)+
              " VALID / "+std::to_string(activeSensors(observation,0,InputCount))+" LIVE",quality);
 
     const auto values = c->brain.predict(compose(observation, sim.advice()));
@@ -382,24 +421,24 @@ void drawInspector(Canvas& out, const Simulation& sim, const View& view) {
         return values[a] > values[b];
     });
     const int best = ordered[0];
-    out.text(524,262,"Q "+shortened(actionName(static_cast<Action>(best)),10),Gold);
-    out.rect(604,263,65,5,Dark);
+    out.text(524,269,"Q "+shortened(actionName(static_cast<Action>(best)),10),Gold);
+    out.rect(604,270,65,5,Dark);
     // Q values are expected discounted rewards, not probabilities.
     const float length = 0.5f+0.5f*std::tanh(values[best]);
-    out.rect(604,263,static_cast<int>(65*length),5,Gold);
-    out.text(676,262,decimal(values[best]),Gold);
-    out.text(524,274,"Q / "+std::to_string(c->brain.updates())+" LEARNING",Muted);
+    out.rect(604,270,static_cast<int>(65*length),5,Gold);
+    out.text(676,269,decimal(values[best]),Gold);
+    out.text(524,281,"Q / "+std::to_string(c->brain.updates())+" LEARNING",Muted);
 }
 
 void drawEvents(Canvas& out, const Simulation& sim) {
-    out.rect(512,292,240,144,Panel);
-    out.text(524,303,"THE CHRONICLE",Teal);
-    out.text(686,303,"0 - 100",Muted);
+    out.rect(512,304,240,132,Panel);
+    out.text(524,315,"THE CHRONICLE",Teal);
+    out.text(686,315,"0 - 100",Muted);
     const auto& events = sim.events();
-    if (events.empty()) { out.text(524,329,"A WORLD ABOUT TO BEGIN.",Muted); return; }
+    if (events.empty()) { out.text(524,341,"A WORLD ABOUT TO BEGIN.",Muted); return; }
     for (std::size_t i = 0; i < std::min<std::size_t>(3,events.size()); ++i) {
         const auto& event = events[events.size()-1-i];
-        const int y = 324+static_cast<int>(i)*35;
+        const int y = 333+static_cast<int>(i)*31;
         const Color color = event.score >= 75 ? Red : event.score >= 40 ? Gold : Teal;
         out.rect(524,y,26,14,blend(Panel,color,0.17f));
         out.text(527,y+4,std::to_string(event.score),color);
@@ -440,24 +479,26 @@ void drawObservation(Canvas& out, const Simulation& sim, const View& view, bool 
     out.rect(16,15,4,22,Teal); out.rect(23,22,4,15,Gold); out.rect(30,28,4,9,Red);
     out.text(44,16,"PIXEL SOCIETY",Cream,2);
     out.text(44,36,"SET THE CONDITIONS. WATCH LIFE UNFOLD.",Muted);
-    out.rect(518,18,4,4,started ? Teal : Gold);
-    out.text(531,17,started ? "LIVE / 5 TICKS PER SECOND" : "A WORLD IN WAITING",started ? Teal : Gold);
+    const bool paused = started && view.menu;
+    out.rect(518,18,4,4,started ? (paused ? Gold : Teal) : Gold);
+    out.text(531,17,started ? (paused ? "PAUSED / OBSERVER MENU" : "LIVE / 5 TICKS PER SECOND") : "A WORLD IN WAITING",
+             started ? (paused ? Gold : Teal) : Gold);
     out.text(518,33,"DAY "+std::to_string(sim.tick()/TicksPerDay+1)+" / "+sim.seasonName()+" / T "+std::to_string(sim.tick()),Muted);
     metric(out,16,"CITIZENS",std::to_string(sim.stats().population),Teal);
     metric(out,114,"WELLBEING",std::to_string(percent(sim.stats().wellbeing))+"%",Gold);
     metric(out,212,"HOMES",std::to_string(sim.stats().homes));
     metric(out,310,"FARMS",std::to_string(sim.stats().farms));
-    metric(out,408,"GENERATION",std::to_string(sim.stats().generation));
+    metric(out,408,"STORES",std::to_string(sim.stats().stores),Gold);
     constexpr std::array<const char*,4> labels{"1 LANDSCAPE","2 RESOURCES","3 CLANS","4 BORDERS"};
     for (int i = 0; i < 4; ++i) {
         if (view.layer == i) out.rect(16+i*104,99,98,14,Edge);
         out.text(22+i*104,102,labels[i],view.layer == i ? Cream : Muted);
     }
-    out.text(446,103,"TAB: NEXT / H: GUIDE",Muted);
+    out.text(434,103,"TAB: NEXT / H: GUIDE / M: MENU",Muted);
     drawWorld(out,sim,view); drawInspector(out,sim,view); drawEvents(out,sim); drawHistory(out,sim);
     out.text(16,441,view.layer == 1 ? "SOIL: BROWN > TEAL    CITIZENS: TEAL > RED = NEED" : view.layer == 3 ? "TINT: CLAIMED LAND    LINES: CIVILISATION BORDERS" : "CLICK TO FOLLOW / EACH PIXEL CITIZEN HAS ITS OWN LEARNING BRAIN",Muted);
     out.text(16,501,"SEED "+std::to_string(sim.config().seed)+" / AUTONOMOUS AFTER START",Muted);
-    out.text(584,501,"H GUIDE / ESC QUIT",Muted);
+    out.text(566,501,"M MENU / H GUIDE",Muted);
 }
 
 std::string settingValue(const Config& config, int field) {
@@ -491,8 +532,8 @@ void drawSetup(Canvas& out, const Config& config, int selectedField) {
     // little breathing room below instead of letting it protrude past the frame.
     out.rect(144,95,480,350,Dark); out.frame(144,95,480,350,Edge);
     out.rect(144,95,480,3,Teal);
-    out.text(168,113,"THE FIRST CONDITIONS",Cream,2);
-    out.text(168,139,"YOUR ONLY INTERVENTION. THEIR ENTIRE FUTURE.",Muted);
+    out.text(168,113,"CREATE A WORLD",Cream,2);
+    out.text(168,139,"CHOOSE CONDITIONS. THEN WATCH LIFE UNFOLD.",Muted);
     const std::array<const char*,7> labels{"WORLD SEED","FOUNDING CITIZENS","LAND FERTILITY","COOPERATION","NATURAL HAZARDS","WORLD SHAPE","WORLD SIZE"};
     const std::array<const char*,7> hints{"DETERMINISTIC WORLD","INITIAL POPULATION","FOOD REGENERATION","FOUNDERS' SOCIAL TRAIT","FIRE AND RAINSTORMS","ISLAND / ARCHIPELAGO / SEAS / RANGES","TINY TO HUGE MAP"};
     for (int i = 0; i < 7; ++i) {
@@ -506,24 +547,47 @@ void drawSetup(Canvas& out, const Config& config, int selectedField) {
         out.rect(574,y+4,22,19,Edge); out.text(582,y+10,"+",Cream);
     }
     out.text(168,376,"ARROWS ADJUST / CLICK - + / ENTER TO BEGIN",Muted);
-    out.text(168,392,"NO PAUSE. NO ORDERS. JUST OBSERVATION.",Gold);
+    out.text(168,392,"AUTONOMOUS AFTER START. OBSERVE OR PAUSE ANY TIME.",Gold);
     out.rect(168,408,432,27,Teal);
-    out.text(264,418,"START THE SIMULATION  >",Dark);
+    out.text(270,418,"BEGIN OBSERVATION  >",Dark);
 }
 void drawHelp(Canvas& out) {
     darken(out);
     out.rect(135,93,498,329,Dark); out.frame(135,93,498,329,Edge);
     out.rect(135,93,498,3,Teal);
     out.text(158,113,"AN OBSERVER'S GUIDE",Cream,2);
-    out.wrap(158,145,"THE WORLD ADVANCES FIVE TIMES EACH SECOND. EVERY CITIZEN READS 82 LIVE SENSORS PLUS 12 ADVISORY SIGNALS FROM ITS CIVILIZATION'S 12-MILLION-PARAMETER SOCIETY CORE, CHOOSES AN ACTION WITH ITS PERSONAL TWO-HIDDEN-LAYER NETWORK, AND LEARNS FROM THE RESULT.",73,3);
+    out.wrap(158,145,"THE WORLD ADVANCES FIVE TIMES EACH SECOND. EVERY CITIZEN READS 92 LIVE SENSORS PLUS 13 ADVISORY SIGNALS FROM ITS CIVILIZATION'S 12-MILLION-PARAMETER SOCIETY CORE, CHOOSES AN ACTION WITH ITS PERSONAL TWO-HIDDEN-LAYER NETWORK, AND LEARNS FROM THE RESULT.",73,3);
     out.text(158,189,"CLICK MAP",Gold); out.text(284,189,"FOLLOW THE NEAREST LIVING CITIZEN");
     out.text(158,207,"TAB",Gold); out.text(284,207,"FOLLOW THE NEXT LIVING CITIZEN");
     out.text(158,225,"1 / 2 / 3 / 4",Gold); out.text(284,225,"LANDSCAPE / RESOURCES / CLANS / BORDERS");
-    out.text(158,243,"H / ESC",Gold); out.text(284,243,"CLOSE GUIDE / ESC AGAIN TO QUIT");
-    out.wrap(158,271,"THE INSPECTOR GROUPS SELF, WORLD, LOCAL, NEARBY AND SOCIAL SENSORS. Q VALUES ESTIMATE FUTURE REWARD; THEY ARE NOT PROBABILITIES.",73,3);
+    out.text(158,243,"M / ESC",Gold); out.text(284,243,"OPEN / CLOSE THE PAUSE MENU");
+    out.wrap(158,271,"THE INSPECTOR GROUPS SELF, WORLD, LOCAL, NEARBY, SOCIAL AND ECONOMY SENSORS. Q VALUES ESTIMATE FUTURE REWARD; THEY ARE NOT PROBABILITIES.",73,3);
     out.wrap(158,316,"EVENT SCORES ALWAYS RUN FROM 0 TO 100: HIGHER MEANS GREATER IMPACT. THE CHRONICLE SHOWS THE LATEST EVENTS. THE RESOURCE LAYER SHOWS SOIL FERTILITY AND CITIZEN NEED. THE BORDERS LAYER TINTS LAND CLAIMED BY EACH CIVILISATION AND LINES ITS FRONTIERS.",73,3);
-    out.text(158,365,"THE SIMULATION CONTINUES WHILE THIS GUIDE IS OPEN.",Teal);
-    out.text(158,391,"H TO RETURN TO YOUR WORLD",Cream);
+    out.text(158,365,"STOREHOUSES HOLD CLAN RESERVES. COURIERS CAN STOCK OR DRAW FROM THEM.",Teal);
+    out.text(158,391,"H OR ESC TO RETURN TO YOUR WORLD",Cream);
+}
+
+void drawPauseMenu(Canvas& out, int selectedChoice) {
+    darken(out);
+    out.rect(205,108,358,300,Dark); out.frame(205,108,358,300,Edge);
+    out.rect(205,108,358,3,Gold);
+    out.text(255,129,"OBSERVER MENU",Cream,2);
+    out.text(255,157,"THE WORLD IS PAUSED",Gold);
+    const std::array<const char*, 4> entries{
+        "RESUME OBSERVATION", "WORLD SETUP", "OBSERVER GUIDE", "QUIT TO DESKTOP"
+    };
+    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+        const int y = 181 + i * 37;
+        const bool focused = i == selectedChoice;
+        out.rect(237,y,294,29,focused ? Panel : Ink);
+        out.frame(237,y,294,29,focused ? Teal : Edge);
+        if (focused) out.rect(237,y,3,29,Teal);
+        out.text(256,y+10,entries[static_cast<std::size_t>(i)],focused ? Cream : Muted);
+        if (focused) out.text(505,y+10,">",Gold);
+    }
+    out.text(241,351,"UP / DOWN SELECT",Muted);
+    out.text(241,367,"ENTER CONFIRM / ESC RESUME",Muted);
+    out.text(241,387,"NO WORLD RULES CHANGE WHILE PAUSED.",Teal);
 }
 
 struct SdlResources {
@@ -588,14 +652,46 @@ int runUi(const UiOptions& options) {
     bool running = true, started = false;
     int selectedField = 0, smokePhase = 0;
     bool smokeSelected = false, smokeLayers = false, smokeGuide = false;
+    bool smokeMenu = false, smokePauseFrozen = false, smokeResumed = false;
     bool smokeSetupFrozen = false;
+    std::uint64_t pauseTick = 0;
     Clock::time_point last = Clock::now(), start = last;
     std::chrono::nanoseconds totalElapsed{};
+    auto returnToSetup = [&] {
+        started = false;
+        view = {};
+        selectedField = 0;
+        ticker = FixedTicker{};
+        totalElapsed = {};
+        sim = std::make_unique<Simulation>(draft);
+        last = start = Clock::now();
+    };
     auto begin = [&] {
         sim = std::make_unique<Simulation>(draft);
         started = true;
+        view.help = false;
+        view.menu = false;
+        view.menuChoice = 0;
+        ticker = FixedTicker{};
+        totalElapsed = {};
         last = start = Clock::now();
         nextCitizen(*sim,view);
+    };
+    auto activateMenu = [&] {
+        switch (view.menuChoice) {
+        case 0:
+            view.menu = false;
+            break;
+        case 1:
+            returnToSetup();
+            break;
+        case 2:
+            view.help = true;
+            break;
+        case 3:
+            running = false;
+            break;
+        }
     };
     while (running) {
         const auto frameStart = Clock::now();
@@ -614,17 +710,37 @@ int runUi(const UiOptions& options) {
             if (event.type == SDL_KEYDOWN && !event.key.repeat) {
                 const auto key = event.key.keysym.sym;
                 if (key == SDLK_ESCAPE) {
-                    if (view.help) view.help = false; else running = false;
+                    if (view.help) view.help = false;
+                    else if (started) {
+                        if (view.menu) view.menu = false;
+                        else { view.menu = true; view.menuChoice = 0; }
+                    } else running = false;
                 } else if (!started) {
                     if (key == SDLK_UP) selectedField = (selectedField+6)%7;
                     if (key == SDLK_DOWN || key == SDLK_TAB) selectedField = (selectedField+1)%7;
                     if (key == SDLK_LEFT) adjust(draft,selectedField,-1);
                     if (key == SDLK_RIGHT) adjust(draft,selectedField,1);
                     if (key == SDLK_RETURN || key == SDLK_KP_ENTER) begin();
+                } else if (view.help) {
+                    // The guide is observational: keep the familiar layer and
+                    // selection shortcuts responsive behind it just as the
+                    // running world itself remains live.
+                    if (key >= SDLK_1 && key <= SDLK_4) view.layer = static_cast<int>(key-SDLK_1);
+                    if (key == SDLK_TAB) nextCitizen(*sim,view);
+                    if (key == SDLK_h || key == SDLK_F1) view.help = false;
+                } else if (view.menu) {
+                    if (key == SDLK_UP) view.menuChoice = (view.menuChoice+3)%4;
+                    if (key == SDLK_DOWN || key == SDLK_TAB) view.menuChoice = (view.menuChoice+1)%4;
+                    if (key == SDLK_h || key == SDLK_F1) view.help = true;
+                    if (key == SDLK_RETURN || key == SDLK_KP_ENTER) activateMenu();
                 } else {
                     if (key >= SDLK_1 && key <= SDLK_4) view.layer = static_cast<int>(key-SDLK_1);
                     if (key == SDLK_TAB) nextCitizen(*sim,view);
                     if (key == SDLK_h || key == SDLK_F1) view.help = !view.help;
+                    if (key == SDLK_m || key == SDLK_p || key == SDLK_SPACE) {
+                        view.menu = true;
+                        view.menuChoice = 0;
+                    }
                 }
             }
             if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
@@ -640,7 +756,21 @@ int runUi(const UiOptions& options) {
                         if (inside(x,y,574,yy+4,22,19)) adjust(draft,i,1);
                     }
                     if (inside(x,y,168,408,432,27)) begin();
-                } else if (!view.help) {
+                } else if (view.help) {
+                    // The guide is deliberately read-only; close it with H or Escape.
+                } else if (view.menu) {
+                    if (!inside(x,y,205,108,358,300)) {
+                        view.menu = false;
+                    } else {
+                        for (int i = 0; i < 4; ++i) {
+                            const int yy = 181 + i * 37;
+                            if (!inside(x,y,237,yy,294,29)) continue;
+                            view.menuChoice = i;
+                            activateMenu();
+                            break;
+                        }
+                    }
+                } else {
                     const MapView map = mapView(*sim);
                     if (inside(x,y,map.x,map.y,map.w,map.h))
                         selectAt(*sim,view,(x-map.x)/map.cell,(y-map.y)/map.cell);
@@ -650,7 +780,7 @@ int runUi(const UiOptions& options) {
             }
         }
         const auto now = Clock::now();
-        if (started) {
+        if (started && !view.menu) {
             const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(now-last);
             totalElapsed += elapsed;
             ticker.advance(elapsed,[&] { sim->step(); });
@@ -684,13 +814,24 @@ int runUi(const UiOptions& options) {
                 // Former setup keys, including ENTER, must have no effect on a live world.
                 pushKey(SDLK_DOWN); pushKey(SDLK_RIGHT); pushKey(SDLK_RETURN);
                 pushKey(SDLK_UP); pushKey(SDLK_LEFT); pushKey(SDLK_SPACE);
+                pushKey(SDLK_m);
+                pauseTick = sim->tick();
                 smokePhase = 5;
-            } else if (smokePhase == 5 && elapsed >= std::chrono::milliseconds(2200)) {
+            } else if (smokePhase == 5 && elapsed >= std::chrono::milliseconds(1600)) {
+                smokeMenu = view.menu;
+                smokePauseFrozen = view.menu && sim->tick() == pauseTick;
+                pushKey(SDLK_RETURN);
+                smokePhase = 6;
+            } else if (smokePhase == 6 && elapsed >= std::chrono::milliseconds(2000)) {
+                smokeResumed = !view.menu && sim->tick() > pauseTick;
+                smokePhase = 7;
+            } else if (smokePhase == 7 && elapsed >= std::chrono::milliseconds(2800)) {
                 running = false;
             }
         }
         drawObservation(canvas,*sim,view,started);
         if (!started) drawSetup(canvas,draft,selectedField);
+        if (view.menu) drawPauseMenu(canvas,view.menuChoice);
         if (view.help) drawHelp(canvas);
         SDL_UpdateTexture(sdl.texture,nullptr,canvas.pixels.data(),Width*static_cast<int>(sizeof(Color)));
         int w = 0, h = 0; SDL_GetRendererOutputSize(sdl.renderer,&w,&h);
@@ -714,12 +855,15 @@ int runUi(const UiOptions& options) {
             actual.fertility == draft.fertility && actual.cooperation == draft.cooperation && actual.hazards == draft.hazards &&
             actual.shape == draft.shape && actual.worldSize == draft.worldSize;
         const bool success = started && setupEdited && smokeSetupFrozen && setupLocked && smokeSelected && smokeLayers && smokeGuide &&
-            !view.help && view.layer == 0 && sim->tick() >= 11 && sim->tick() == expected && autonomous;
+            smokeMenu && smokePauseFrozen && smokeResumed && !view.help && !view.menu && view.layer == 0 &&
+            sim->tick() >= 11 && sim->tick() == expected && autonomous;
         std::cout << "UI smoke: " << (success ? "PASS" : "FAIL") << "; ticks=" << sim->tick()
                   << "; expected_at_5Hz=" << expected << "; setup=" << setupEdited
                   << "; setup_frozen=" << smokeSetupFrozen << "; setup_locked=" << setupLocked
                   << "; selection=" << smokeSelected << "; layers=" << smokeLayers
-                  << "; guide=" << smokeGuide << "; observer_preserved_world=" << autonomous << '\n';
+                  << "; guide=" << smokeGuide << "; menu=" << smokeMenu
+                  << "; pause_frozen=" << smokePauseFrozen << "; resumed=" << smokeResumed
+                  << "; observer_preserved_world=" << autonomous << '\n';
         return success ? 0 : 1;
     }
     return 0;

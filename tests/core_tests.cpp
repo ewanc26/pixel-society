@@ -35,6 +35,7 @@ constexpr int ThreadRunTicks = 150;
 constexpr int CrowdedRunTicks = 100;
 constexpr int TestAdvisorEvery = 4;
 #endif
+constexpr int EconomyRunTicks = 160;
 
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
@@ -91,16 +92,22 @@ void collectObservations(const Simulation& sim, ObservationSurvey& survey) {
 }
 
 void neural() {
-    require(InputCount == 82, "the policy must expose 82 input features");
+    require(InputCount == 92, "the policy must expose 92 input features");
     require(HiddenOneCount == 56 && HiddenTwoCount == 28,
             "the policy must retain its 56 then 28 hidden-neuron architecture");
-    require(ActionCount == 12, "the policy must retain twelve ranked intentions");
+    require(ActionCount == 13, "the policy must retain thirteen ranked intentions");
     require(BrainInputCount == InputCount + ActionCount,
             "an individual policy joins its observation with one advisory value per action");
+    require(BrainInputCount == 105, "the personal policy must receive 92 observations and 13 advisory values");
+    require(std::string(actionName(Action::Haul)) == "HAUL", "the shared economy exposes a haul intention");
 
     // The society core is the shared wide neural AI behind action selection.
     require(SocietyCore::parameterCount() >= 10'000'000,
             "the society core neural AI must contain at least ten million parameters");
+    require(SocietyCore::parameterCount() == 12'025'357,
+            "the published 92-to-13 society core parameter count must be exact");
+    require(Brain::parameterCount() == 7'909,
+            "the published 105-to-13 personal policy parameter count must be exact");
     require(Brain::parameterCount() < SocietyCore::parameterCount(),
             "the shared society core is the largest network in the system");
     auto coreSeven = std::make_unique<SocietyCore>(7);
@@ -181,7 +188,7 @@ void neural() {
                 "training must make action values discriminate the society core advisory input");
     }
 
-    // The final observation sensor (a previous-action bit) is deliberately
+    // The final observation sensor (a collective-economy signal) is deliberately
     // isolated while the advice channels are fixed: this catches networks that
     // allocate the advertised high-dimensional observation but never connect
     // its deep tail to the learned action values.
@@ -204,7 +211,7 @@ void neural() {
         const float afterLow = tailSensitive.predict(low)[static_cast<int>(Action::Farm)];
         const float afterHigh = tailSensitive.predict(high)[static_cast<int>(Action::Farm)];
         require(afterHigh - afterLow > 0.35f,
-                "training must make an action value discriminate observations that differ only at input 81");
+                "training must make an action value discriminate observations that differ only at input 91");
         require(std::abs(afterLow - beforeLow) > 0.05f || std::abs(afterHigh - beforeHigh) > 0.05f,
                 "deep-tail training must materially change predicted action values");
     }
@@ -246,7 +253,7 @@ void observations() {
     // Empty infrastructure and the absence of an active disaster are valid
     // initial conditions, so this asks for broad live data without demanding
     // every optional world signal at tick zero.
-    require(initial.nonzero() >= InputCount * 11 / 20,
+    require(initial.nonzero() >= InputCount / 2,
             "a new world must populate a substantial portion of its observation data");
     require(initial.nonzero(InputCount / 2) >= InputCount / 5,
             "a new world must expose substantial high-index sensor data");
@@ -302,21 +309,84 @@ void invariants(const Simulation& sim) {
         require(sim.tile(c.x, c.y).terrain != Terrain::Water, "citizens cannot walk on water");
         require(std::isfinite(c.health) && c.health > 0 && c.health <= 1, "living health valid");
         require(std::isfinite(c.food) && c.food >= 0 && std::isfinite(c.wood) && c.wood >= 0, "inventories finite nonnegative");
+        for (float skill : c.skills)
+            require(std::isfinite(skill) && skill >= 0 && skill <= 1, "learned work skills stay normalized");
         for (float input : sim.observe(c)) require(std::isfinite(input) && input >= 0 && input <= 1, "features normalized");
         for (float output : c.brain.predict(compose(sim.observe(c), sim.advice())))
             require(std::isfinite(output), "network values finite");
     }
     require(alive == s.population, "population statistics match actual citizens");
     require(s.population == sim.config().founders + s.births - s.deaths, "births and deaths conserve population");
+    int countedStores = 0;
     for (const auto& t : sim.tiles()) {
         require(std::isfinite(t.food) && t.food >= 0 && std::isfinite(t.wood) && t.wood >= 0, "world resources finite and nonnegative");
         require(std::isfinite(t.fire) && t.fire >= 0, "fire finite and nonnegative");
         if (t.structure != Structure::None) require(t.terrain != Terrain::Water, "structures stay on land");
+        if (t.structure == Structure::Storehouse) ++countedStores;
     }
+    int ledgerStores = 0;
+    float reserveFood = 0, reserveWood = 0;
+    std::uint64_t deliveries = 0;
+    for (const ClanLedger& reserve : sim.ledgers()) {
+        require(std::isfinite(reserve.food) && reserve.food >= 0 &&
+                    reserve.food <= reserve.storehouses * StorehouseFoodCapacity + .0001f,
+                "food reserves remain finite and within storehouse capacity");
+        require(std::isfinite(reserve.wood) && reserve.wood >= 0 &&
+                    reserve.wood <= reserve.storehouses * StorehouseWoodCapacity + .0001f,
+                "wood reserves remain finite and within storehouse capacity");
+        ledgerStores += reserve.storehouses;
+        reserveFood += reserve.food;
+        reserveWood += reserve.wood;
+        deliveries += reserve.deliveries;
+    }
+    require(countedStores == s.stores && ledgerStores == s.stores,
+            "tile, ledger and headline storehouse counts agree");
+    require(std::abs(reserveFood - s.reserveFood) < .0001f && std::abs(reserveWood - s.reserveWood) < .0001f,
+            "headline reserve totals agree with clan ledgers");
+    require(deliveries == s.hauls, "every recorded delivery contributes to the global haul total");
     for (const auto& event : sim.events()) {
         require(event.score >= 0 && event.score <= 100, "every event score in 0..100");
         require(event.tick <= sim.tick() && !event.kind.empty() && !event.text.empty(), "events have timestamp and content");
     }
+}
+void economy() {
+    // This normal seed produces one storehouse for each founding clan early in
+    // the run. The test observes the actual autonomous loop rather than
+    // seeding tiles or ledgers directly, so the neural Haul action, routing and
+    // reserve accounting all have to work together.
+    Config config;
+    config.seed = 42;
+    accelerateAdvisor(config);
+    Simulation sim(config);
+    bool storehouseEvent = false, haulEvent = false;
+    for (int tick = 0; tick < EconomyRunTicks; ++tick) {
+        sim.step();
+        for (const Event& event : sim.events()) {
+            storehouseEvent = storehouseEvent || event.kind == "storehouse";
+            haulEvent = haulEvent || event.kind == "haul";
+        }
+    }
+    invariants(sim);
+    const Statistics& stats = sim.stats();
+    require(stats.stores > 0 && storehouseEvent,
+            "autonomous builders must establish shared clan storehouses");
+    require(stats.actions[static_cast<int>(Action::Haul)] > 0 && stats.hauls > 0 && haulEvent,
+            "citizens must autonomously route and perform reserve deliveries");
+    require(stats.reserveFood > 0 || stats.reserveWood > 0,
+            "storehouses must hold a real communal reserve after deliveries");
+    bool activeEconomySensors = false;
+    bool experiencedCourier = false;
+    for (const Citizen& citizen : sim.citizens()) {
+        if (!citizen.alive) continue;
+        const Observation state = sim.observe(citizen);
+        activeEconomySensors = activeEconomySensors || state[85] > 0 || state[83] > 0 || state[84] > 0;
+        experiencedCourier = experiencedCourier || citizen.skills[3] > .01f;
+    }
+    require(activeEconomySensors, "the new economy observations must reflect a live shared reserve");
+    require(experiencedCourier, "repeated deliveries must develop a citizen logistics skill");
+    std::cout << "economy seed" << config.seed << ": stores=" << stats.stores
+              << " food=" << stats.reserveFood << " wood=" << stats.reserveWood
+              << " hauls=" << stats.hauls << '\n';
 }
 void society() {
     Config config; config.seed = 42;
@@ -554,8 +624,9 @@ int main() {
         timing(); std::cout << "PASS fixed5Hz timing and catchup\n";
         neural(); std::cout << "PASS deep neural inference, learning, masks, inheritance\n";
         culture(); std::cout << "PASS social imitation and cultural transmission\n";
-        observations(); std::cout << "PASS 82-feature individual and environmental observations\n";
+        observations(); std::cout << "PASS 92-feature individual, environmental and economic observations\n";
         society(); std::cout << "PASS autonomous society, event ranks, determinism\n";
+        economy(); std::cout << "PASS shared storehouses, logistics and reserve accounting\n";
         borders(); std::cout << "PASS deterministic civilisation territory borders\n";
         landscapes(); std::cout << "PASS world shape and size presets\n";
         mechanics(); std::cout << "PASS disease, fire succession and cultural mechanics\n";
