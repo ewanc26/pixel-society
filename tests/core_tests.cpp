@@ -10,6 +10,14 @@
 
 using namespace pixels;
 namespace {
+#if defined(PIXEL_SOCIETY_SANITIZE_BUILD)
+constexpr int AutonomousRunTicks = 1200;
+constexpr int HarshRunTicks = 500;
+#else
+constexpr int AutonomousRunTicks = 6000;
+constexpr int HarshRunTicks = 1500;
+#endif
+
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -121,13 +129,13 @@ void society() {
     std::uint64_t decisions = 0;
     for (auto count : a.stats().actions) decisions += count;
     require(decisions == a.stats().decisions, "action counters account for every decision");
-    for (int i = 500; i < 6000; ++i) {
+    for (int i = 500; i < AutonomousRunTicks; ++i) {
         a.step();
         if (i % 500 == 0) invariants(a);
     }
     invariants(a);
     const auto& s = a.stats();
-    std::cout << "seed42 at6000 ticks: population=" << s.population << " births=" << s.births
+    std::cout << "seed42 at" << AutonomousRunTicks << " ticks: population=" << s.population << " births=" << s.births
               << " homes=" << s.homes << " farms=" << s.farms << " updates=" << s.learningUpdates << '\n';
     require(s.births > 0, "neural citizens must autonomously produce new generations");
     require(s.homes > 0 && s.farms > 0, "neural citizens must autonomously construct society");
@@ -144,7 +152,7 @@ void extremes() {
     rejects([&] { Simulation sim(config); }, "NaN config rejected");
     config.fertility = 0; config.hazards = 1; config.cooperation = 0;
     Simulation harsh(config);
-    for (int i = 0; i < 1500; ++i) harsh.step();
+    for (int i = 0; i < HarshRunTicks; ++i) harsh.step();
     invariants(harsh);
     config.founders = PopulationLimit; config.fertility = 1; config.hazards = 0; config.cooperation = 1;
     Simulation crowded(config);

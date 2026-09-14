@@ -105,6 +105,7 @@ private:
     bool walkable(int x, int y) const;
     int nearest(int x, int y, int kind, int radius = 24, int exclude = -1) const;
     bool moveToward(Citizen& citizen, int target);
+    bool moveAlongField(Citizen& citizen, int kind);
     void die(Citizen& citizen, const std::string& reason);
 };
 }

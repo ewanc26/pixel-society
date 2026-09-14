@@ -30,6 +30,12 @@ include(CTest)
 if(BUILD_TESTING)
     add_executable(society-tests tests/core_tests.cpp)
     target_link_libraries(society-tests PRIVATE society_core)
+    if(PIXEL_SOCIETY_SANITIZE)
+        # The release suite exercises a long multi-generation run. Sanitizers
+        # exercise the same paths with a shorter sustained run so CI keeps its
+        # memory-safety signal without timing out on instrumented code.
+        target_compile_definitions(society-tests PRIVATE PIXEL_SOCIETY_SANITIZE_BUILD=1)
+    endif()
     add_test(NAME core COMMAND society-tests)
     set_tests_properties(core PROPERTIES TIMEOUT 180)
     add_test(NAME help COMMAND pixel-society --help)

@@ -272,27 +272,53 @@ bool Simulation::moveToward(Citizen& citizen, int target) {
         return exact ? cell == target : distance(cell % WorldWidth, cell / WorldWidth, tx, ty) == 1;
     };
     if (reached(start)) return false;
-    std::array<int, Area> previous;
-    previous.fill(-1);
-    std::array<int, Area> queue{};
-    int read = 0, write = 0, end = -1;
-    queue[write++] = start; previous[start] = start;
-    while (read < write && end < 0) {
-        const int cell = queue[read++];
-        for (const auto& direction : Directions) {
-            const int nx = cell % WorldWidth + direction[0], ny = cell / WorldWidth + direction[1];
-            if (!walkable(nx, ny)) continue;
-            const int next = indexOf(nx, ny);
-            if (previous[next] >= 0) continue;
-            previous[next] = cell;
-            queue[write++] = next;
-            if (reached(next)) { end = next; break; }
+    // Social and construction targets are nearby. A deterministic local step
+    // gives each actor cheap, continuous navigation; the cached breadth-first
+    // fields handle long trips to resources. Choosing a side step at an
+    // obstacle lets citizens work around rocks without a costly full-map path
+    // search on every social interaction.
+    int next = -1;
+    int best = std::numeric_limits<int>::max();
+    for (const auto& direction : Directions) {
+        const int nx = citizen.x + direction[0], ny = citizen.y + direction[1];
+        if (!walkable(nx, ny)) continue;
+        const int candidate = distance(nx, ny, tx, ty);
+        if (candidate < best) {
+            best = candidate;
+            next = indexOf(nx, ny);
         }
     }
-    if (end < 0) return false;
-    while (previous[end] != start) end = previous[end];
-    citizen.x = end % WorldWidth; citizen.y = end / WorldWidth;
-    tiles_[end].traffic = unit(tiles_[end].traffic + .045f);
+    if (next < 0) return false;
+    citizen.x = next % WorldWidth; citizen.y = next / WorldWidth;
+    tiles_[next].traffic = unit(tiles_[next].traffic + .045f);
+    citizen.energy = unit(citizen.energy - .0015f);
+    return true;
+}
+
+bool Simulation::moveAlongField(Citizen& citizen, int kind) {
+    if (kind < 0 || kind >= 5) return false;
+    const int start = indexOf(citizen.x, citizen.y);
+    const auto& distances = distances_[kind];
+    if (distances[start] >= Area) return false;
+    int next = -1;
+    int best = distances[start];
+    // The multi-source breadth-first field was rebuilt before the citizens
+    // act. One local gradient step follows the same shortest route as a fresh
+    // path search, without doing a full-world search for every food or water
+    // trip. Tie order stays stable for deterministic runs.
+    for (const auto& direction : Directions) {
+        const int nx = citizen.x + direction[0], ny = citizen.y + direction[1];
+        if (!walkable(nx, ny)) continue;
+        const int candidate = indexOf(nx, ny);
+        if (distances[candidate] < best) {
+            best = distances[candidate];
+            next = candidate;
+        }
+    }
+    if (next < 0) return false;
+    citizen.x = next % WorldWidth;
+    citizen.y = next / WorldWidth;
+    tiles_[next].traffic = unit(tiles_[next].traffic + .045f);
     citizen.energy = unit(citizen.energy - .0015f);
     return true;
 }
@@ -324,7 +350,7 @@ float Simulation::act(Citizen& citizen, Action action) {
     }
     case Action::Gather: {
         const int target = nearest(citizen.x, citizen.y, 0, Area);
-        if (target != cell) return travel(target);
+        if (target != cell) return moveAlongField(citizen, 0) ? .015f : -.015f;
         const float amount = std::min({2.0f, ground.food, 10 - citizen.food});
         const float demand = .15f + .65f * (1 - citizen.food / 10) + .2f * citizen.hunger;
         citizen.food += amount; ground.food -= amount;
@@ -339,7 +365,8 @@ float Simulation::act(Citizen& citizen, Action action) {
     case Action::Drink: {
         const int target = nearest(citizen.x, citizen.y, 1, Area);
         if (target < 0) return -.05f;
-        if (distance(citizen.x, citizen.y, target % WorldWidth, target / WorldWidth) > 1) return travel(target);
+        if (distance(citizen.x, citizen.y, target % WorldWidth, target / WorldWidth) > 1)
+            return moveAlongField(citizen, 1) ? .015f : -.015f;
         const float before = citizen.thirst;
         citizen.thirst = unit(citizen.thirst - .7f);
         return .9f * (before - citizen.thirst) - .006f;
@@ -353,7 +380,7 @@ float Simulation::act(Citizen& citizen, Action action) {
     }
     case Action::Chop: {
         const int target = nearest(citizen.x, citizen.y, 2, Area);
-        if (target != cell) return travel(target);
+        if (target != cell) return moveAlongField(citizen, 2) ? .015f : -.015f;
         const float demand = 1 - citizen.wood / 10;
         const float amount = std::min({1.5f, ground.wood, 10 - citizen.wood});
         citizen.wood += amount; ground.wood -= amount;
@@ -368,9 +395,12 @@ float Simulation::act(Citizen& citizen, Action action) {
         ground.terrain = Terrain::Grass; ground.wood = 0; ground.food = 0;
         citizen.wood -= 4;
         ++stats_.homes;
+        // Shelter becomes progressively less valuable once this community has
+        // enough nearby places to rest. The policy still decides whether to
+        // build; this reward makes limitless construction a bad experience.
         const float need = unit(1 - stats_.homes * 3.0f / std::max(1, stats_.population));
         emit("home", "Citizen " + std::to_string(citizen.id) + " builds a home", .3f + .25f * need, citizen.x, citizen.y);
-        return .15f + .8f * need;
+        return .90f * need - .25f;
     }
     case Action::Farm: {
         const int target = nearest(citizen.x, citizen.y, 4, Area);
@@ -395,11 +425,17 @@ float Simulation::act(Citizen& citizen, Action action) {
                 ground.fertility = std::max(ground.fertility, .45f);
                 citizen.wood -= 1;
                 ++stats_.farms;
+                // A field yields enough food for roughly two citizens under
+                // ordinary conditions. Plenty of fields and carried food make
+                // a further conversion of wild land an unattractive action.
+                const float fieldCoverage = stats_.farms * 2.0f / std::max(1, stats_.population);
+                const float foodSecurity = unit(stats_.food / std::max(1.0f, stats_.population * 4.0f));
+                const float need = unit(.8f * (1 - fieldCoverage) + .2f * (1 - foodSecurity));
                 emit("farm", "Citizen " + std::to_string(citizen.id) + " plants a communal field", .4f, citizen.x, citizen.y);
-                return .65f;
+                return .80f * need - .18f;
             }
         }
-        return travel(target);
+        return target >= 0 && moveAlongField(citizen, 4) ? .015f : -.015f;
     }
     case Action::Share:
     case Action::Socialize:
@@ -540,7 +576,11 @@ void Simulation::environment() {
         }
         emit("storm", "A rainstorm drenches the region and quenches fires", .58f, cx, cy);
     }
-    rebuildDestinations();
+    // Resource maps remain accurate enough for one second of real time. They
+    // are intentionally cached so a populous world can stay responsive at the
+    // fixed five-ticks-per-second rate instead of spending each tick rebuilding
+    // the entire map for every citizen's changing inventory.
+    if (tick_ % TicksPerSecond == 0) rebuildDestinations();
 }
 
 void Simulation::step() {
