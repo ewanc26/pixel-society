@@ -12,6 +12,8 @@ constexpr int Area = WorldWidth * WorldHeight;
 constexpr int Directions[4][2] = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};
 constexpr std::size_t EventLimit = 8192;
 constexpr std::size_t HistoryLimit = 600;
+constexpr int ClanCount = 4;
+static_assert(InputCount == 82, "Simulation observation producer follows the 82-feature contract");
 float unit(float value) { return std::clamp(value, 0.0f, 1.0f); }
 int indexOf(int x, int y) { return y * WorldWidth + x; }
 bool inBounds(int x, int y) { return x >= 0 && y >= 0 && x < WorldWidth && y < WorldHeight; }
@@ -28,9 +30,14 @@ float comfort(const Citizen& citizen) {
     return unit(.35f * citizen.health + .2f * (1 - citizen.hunger) +
                 .2f * (1 - citizen.thirst) + .15f * citizen.energy + .1f * citizen.social);
 }
+bool birthReady(const Citizen& citizen, const Config& config) {
+    return citizen.age >= 600 && citizen.age < 6600 && citizen.birthCooldown == 0 &&
+           citizen.food >= 3 && citizen.health > .6f && citizen.energy > .35f &&
+           citizen.hunger < .65f && config.fertility > 0;
+}
 }
 
-Simulation::Simulation(Config config) : config_(config), rng_(config.seed), tiles_(Area) {
+Simulation::Simulation(Config config) : core_(makeSocietyCore(config.seed)), config_(config), rng_(config.seed), tiles_(Area) {
     if (config.founders < 2 || config.founders > PopulationLimit ||
         !std::isfinite(config.fertility) || config.fertility < 0 || config.fertility > 1 ||
         !std::isfinite(config.cooperation) || config.cooperation < 0 || config.cooperation > 1 ||
@@ -103,12 +110,12 @@ void Simulation::generate() {
         }
         ++component;
     }
-    const Brain founderPolicy = makeFounderBrain(config_.seed);
-    const std::array<std::pair<int, int>, 4> camps = {{{30, 22}, {63, 24}, {24, 43}, {70, 43}}};
+    const Brain founderPolicy = makeFounderBrain(config_.seed, *core_);
+    const std::array<std::pair<int, int>, ClanCount> camps = {{{30, 22}, {63, 24}, {24, 43}, {70, 43}}};
     for (int i = 0; i < config_.founders; ++i) {
         Citizen citizen;
         citizen.id = nextId_++;
-        citizen.clan = i % 4;
+        citizen.clan = i % ClanCount;
         citizen.age = 600 + static_cast<int>(rng_() % 1200);
         citizen.cooperation = unit(config_.cooperation + (randomUnit(rng_) - .5f) * .3f);
         citizen.aggression = unit(.05f + (1 - citizen.cooperation) * .6f + randomUnit(rng_) * .1f);
@@ -219,27 +226,204 @@ int Simulation::nearest(int x, int y, int kind, int radius, int exclude) const {
 
 Observation Simulation::observe(const Citizen& citizen) const {
     Observation state{};
+    // [0,19] are the original controller inputs. Keep their calculations in
+    // place because the founder curriculum and existing learned policies use
+    // this prefix as their stable survival vocabulary.
     state[0] = citizen.hunger; state[1] = citizen.thirst; state[2] = 1 - citizen.energy;
     state[3] = 1 - citizen.social; state[4] = 1 - citizen.health;
     state[5] = citizen.food / 10; state[6] = citizen.wood / 10;
     state[7] = citizen.cooperation; state[8] = citizen.aggression;
     state[9] = citizen.age / 6000.0f;
+    int closest = -1;
     if (inBounds(citizen.x, citizen.y)) {
         const int cell = indexOf(citizen.x, citizen.y);
         for (int kind = 0; kind < 5; ++kind) {
             if (destinations_[kind][cell] >= 0) state[10 + kind] = 1.0f / (1 + distances_[kind][cell]);
         }
-        const int other = nearest(citizen.x, citizen.y, 5, WorldWidth + WorldHeight, citizen.id);
-        if (other >= 0) state[15] = 1.0f / (1 + distance(citizen.x, citizen.y, citizens_[other].x, citizens_[other].y));
+        closest = nearest(citizen.x, citizen.y, 5, WorldWidth + WorldHeight, citizen.id);
+        if (closest >= 0) state[15] = 1.0f / (1 + distance(citizen.x, citizen.y, citizens_[closest].x, citizens_[closest].y));
         state[16] = tiles_[cell].fire;
         state[19] = tiles_[cell].fertility;
     }
     state[17] = seasonYield();
-    state[18] = citizen.age >= 600 && citizen.age < 6600 && citizen.birthCooldown == 0 &&
-                        citizen.food >= 3 && citizen.health > .6f && citizen.energy > .35f &&
-                        citizen.hunger < .65f && config_.fertility > 0 ? 1.0f : 0.0f;
+    state[18] = birthReady(citizen, config_) ? 1.0f : 0.0f;
+
+    // [20,27] are slow-changing personal and society-wide context. Statistics
+    // are refreshed at the end of every tick; construction, births and deaths
+    // also adjust their relevant counters immediately, yielding a cheap,
+    // deterministic global snapshot while citizens take their turns.
+    const float population = static_cast<float>(std::max(0, stats_.population));
+    state[20] = (citizen.lastReward + 2.0f) * .25f;
+    state[21] = population / static_cast<float>(PopulationLimit);
+    if (population > 0.0f) {
+        state[22] = static_cast<float>(stats_.homes) * 3.0f / population;
+        state[23] = static_cast<float>(stats_.farms) * 2.0f / population;
+        state[24] = stats_.food / (population * 4.0f);
+    }
+    state[25] = stats_.wellbeing;
+    state[26] = stats_.cooperation;
+    state[27] = static_cast<float>(std::max(0, stats_.generation)) / 8.0f;
+
+    // [28,31] provide a categorical season rather than requiring the network
+    // to infer a phase from the season-yield scalar alone.
+    const int season = static_cast<int>((tick_ / (TicksPerDay * 4)) % 4);
+    state[28 + season] = 1.0f;
+
+    if (inBounds(citizen.x, citizen.y)) {
+        const int cell = indexOf(citizen.x, citizen.y);
+        const Tile& ground = tiles_[cell];
+
+        // [32,40] are the resources, built use and terrain directly under the
+        // citizen. They let identical needs lead to different intentions on a
+        // cultivated field, a forest, or a hazardous/trafficked route.
+        state[32] = ground.food / 8.0f;
+        state[33] = ground.wood / 5.0f;
+        state[34] = ground.traffic;
+        state[35] = ground.structure == Structure::Home ? 1.0f : 0.0f;
+        state[36] = ground.structure == Structure::Farm ? 1.0f : 0.0f;
+        state[37] = ground.terrain == Terrain::Sand ? 1.0f : 0.0f;
+        state[38] = ground.terrain == Terrain::Grass ? 1.0f : 0.0f;
+        state[39] = ground.terrain == Terrain::Forest ? 1.0f : 0.0f;
+        state[40] = ground.terrain == Terrain::Rock ? 1.0f : 0.0f;
+
+        struct Neighborhood {
+            float food = 0, wood = 0, fertility = 0, fire = 0, traffic = 0;
+            float homes = 0, farms = 0, peopleDensity = 0;
+            float cooperation = 0, aggression = 0, clanDiversity = 0;
+        };
+        auto summarize = [&](int radius) {
+            Neighborhood summary;
+            const int minX = std::max(0, citizen.x - radius);
+            const int maxX = std::min(WorldWidth - 1, citizen.x + radius);
+            const int minY = std::max(0, citizen.y - radius);
+            const int maxY = std::min(WorldHeight - 1, citizen.y + radius);
+            int tiles = 0;
+            for (int y = minY; y <= maxY; ++y) {
+                for (int x = minX; x <= maxX; ++x) {
+                    const Tile& nearby = tiles_[indexOf(x, y)];
+                    ++tiles;
+                    summary.food += unit(nearby.food / 8.0f);
+                    summary.wood += unit(nearby.wood / 5.0f);
+                    summary.fertility += unit(nearby.fertility);
+                    summary.fire += unit(nearby.fire);
+                    summary.traffic += unit(nearby.traffic);
+                    summary.homes += nearby.structure == Structure::Home ? 1.0f : 0.0f;
+                    summary.farms += nearby.structure == Structure::Farm ? 1.0f : 0.0f;
+                }
+            }
+            const float inverseTiles = tiles > 0 ? 1.0f / static_cast<float>(tiles) : 0.0f;
+            summary.food *= inverseTiles;
+            summary.wood *= inverseTiles;
+            summary.fertility *= inverseTiles;
+            summary.fire *= inverseTiles;
+            summary.traffic *= inverseTiles;
+            summary.homes *= inverseTiles;
+            summary.farms *= inverseTiles;
+
+            // Citizen aggregation uses the same clipped square as the tile
+            // scan. It stays bounded by PopulationLimit and stores counts on
+            // the stack, avoiding per-observation allocation in the hot path.
+            int people = 0;
+            std::array<int, ClanCount> clans{};
+            for (const Citizen& nearby : citizens_) {
+                if (!nearby.alive || std::abs(nearby.x - citizen.x) > radius ||
+                    std::abs(nearby.y - citizen.y) > radius) continue;
+                ++people;
+                summary.cooperation += nearby.cooperation;
+                summary.aggression += nearby.aggression;
+                ++clans[std::clamp(nearby.clan, 0, ClanCount - 1)];
+            }
+            summary.peopleDensity = tiles > 0 ? static_cast<float>(people) / static_cast<float>(tiles) : 0.0f;
+            if (people > 0) {
+                const float inversePeople = 1.0f / static_cast<float>(people);
+                summary.cooperation *= inversePeople;
+                summary.aggression *= inversePeople;
+                // Normalized Simpson diversity is zero for one represented
+                // clan and one for a perfectly balanced four-clan neighborhood.
+                float concentration = 0.0f;
+                for (int count : clans) {
+                    const float share = static_cast<float>(count) * inversePeople;
+                    concentration += share * share;
+                }
+                summary.clanDiversity = (1.0f - concentration) / (1.0f - 1.0f / static_cast<float>(ClanCount));
+            }
+            return summary;
+        };
+
+        // [41,51] and [52,62] are respectively radius-two and radius-five
+        // square summaries: resources, hazards, construction, population and
+        // social temperament. They are sampled from the live tile/citizen
+        // state, never placeholders.
+        const Neighborhood near = summarize(2);
+        const Neighborhood broad = summarize(5);
+        auto writeNeighborhood = [&](int start, const Neighborhood& summary) {
+            state[start] = summary.food;
+            state[start + 1] = summary.wood;
+            state[start + 2] = summary.fertility;
+            state[start + 3] = summary.fire;
+            state[start + 4] = summary.traffic;
+            state[start + 5] = summary.homes;
+            state[start + 6] = summary.farms;
+            state[start + 7] = summary.peopleDensity;
+            state[start + 8] = summary.cooperation;
+            state[start + 9] = summary.aggression;
+            state[start + 10] = summary.clanDiversity;
+        };
+        writeNeighborhood(41, near);
+        writeNeighborhood(52, broad);
+
+        // [63,69] retain the nearest reachable citizen's needs and traits,
+        // then distinguish nearby allies from members of other clans. A
+        // positive proximity is also a presence signal; zero means absent.
+        if (closest >= 0) {
+            const Citizen& neighbour = citizens_[static_cast<std::size_t>(closest)];
+            state[63] = neighbour.hunger;
+            state[64] = neighbour.food / 10.0f;
+            state[65] = neighbour.cooperation;
+            state[66] = neighbour.aggression;
+            state[67] = 1.0f - neighbour.social;
+        }
+        const int component = landComponents_[cell];
+        int sameClanDistance = Area;
+        int differentClanDistance = Area;
+        for (const Citizen& neighbour : citizens_) {
+            if (!neighbour.alive || neighbour.id == citizen.id ||
+                landComponents_[indexOf(neighbour.x, neighbour.y)] != component) continue;
+            const int separation = distance(citizen.x, citizen.y, neighbour.x, neighbour.y);
+            if (neighbour.clan == citizen.clan) sameClanDistance = std::min(sameClanDistance, separation);
+            else differentClanDistance = std::min(differentClanDistance, separation);
+        }
+        if (sameClanDistance < Area) state[68] = 1.0f / (1.0f + static_cast<float>(sameClanDistance));
+        if (differentClanDistance < Area) state[69] = 1.0f / (1.0f + static_cast<float>(differentClanDistance));
+    }
+
+    // [70,81] encode the action selected on the prior decision. At the start
+    // of a tick Citizen::action is the last completed intention; after an
+    // action resolves it becomes the prior-action input for the next state.
+    const int previousAction = static_cast<int>(citizen.action);
+    if (previousAction >= 0 && previousAction < ActionCount) state[70 + previousAction] = 1.0f;
     for (float& value : state) value = std::isfinite(value) ? unit(value) : 0;
     return state;
+}
+
+Values Simulation::currentAdvice() const {
+    // The society core reads the population's mean observation, so its advice
+    // summarizes the whole settlement rather than any single resident. Every
+    // citizen combines that shared advice with its own live observation.
+    CoreInput mean{};
+    std::size_t living = 0;
+    for (std::size_t i = 0; i < citizens_.size(); ++i) {
+        const Citizen& resident = citizens_[i];
+        if (!resident.alive) continue;
+        const Observation view = observe(resident);
+        for (int k = 0; k < InputCount; ++k) mean[static_cast<std::size_t>(k)] += view[static_cast<std::size_t>(k)];
+        ++living;
+    }
+    if (living > 0) {
+        const float inverse = 1.0f / static_cast<float>(living);
+        for (int k = 0; k < InputCount; ++k) mean[static_cast<std::size_t>(k)] *= inverse;
+    }
+    return core_->advise(mean);
 }
 
 ActionMask Simulation::legalActions(const Citizen& citizen) const {
@@ -257,7 +441,7 @@ ActionMask Simulation::legalActions(const Citizen& citizen) const {
     legal[static_cast<int>(Action::Farm)] = nearest(citizen.x, citizen.y, 4, Area) >= 0 || (citizen.wood >= 1 && site >= 0);
     legal[static_cast<int>(Action::Share)] = citizen.food > .5f && other >= 0;
     legal[static_cast<int>(Action::Socialize)] = other >= 0;
-    legal[static_cast<int>(Action::Reproduce)] = observe(citizen)[18] > .5f && nearest(citizen.x, citizen.y, 7, 24, citizen.id) >= 0 &&
+    legal[static_cast<int>(Action::Reproduce)] = birthReady(citizen, config_) && nearest(citizen.x, citizen.y, 7, 24, citizen.id) >= 0 &&
         citizens_.size() < PopulationLimit;
     legal[static_cast<int>(Action::Attack)] = other >= 0;
     return legal;
@@ -460,7 +644,7 @@ float Simulation::act(Citizen& citizen, Action action) {
             return .5f * (citizen.social - before) - .007f;
         }
         if (action == Action::Reproduce) {
-            if (citizens_.size() >= PopulationLimit || observe(citizen)[18] < .5f) return -.03f;
+            if (citizens_.size() >= PopulationLimit || !birthReady(citizen, config_)) return -.03f;
             if (randomUnit(rng_) >= .35f * config_.fertility + .03f) return -.004f;
             Citizen child;
             child.id = nextId_++; child.x = citizen.x; child.y = citizen.y;
@@ -489,7 +673,8 @@ float Simulation::act(Citizen& citizen, Action action) {
         if (other.health <= 0) {
             const Observation finalState = observe(other);
             die(other, "conflict");
-            other.brain.learn(finalState, other.action, -1.5f, finalState, legalActions(other), true);
+            other.brain.learn(compose(finalState, advice_), other.action, -1.5f,
+                              compose(finalState, advice_), legalActions(other), true);
             ++stats_.learningUpdates;
         }
         return stolen * citizen.hunger * citizen.aggression * .15f - .22f * (1 - citizen.aggression);
@@ -587,11 +772,13 @@ void Simulation::step() {
     ++tick_;
     citizens_.erase(std::remove_if(citizens_.begin(), citizens_.end(), [](const Citizen& citizen) { return !citizen.alive; }), citizens_.end());
     environment();
+    // This tick's shared advisory context, derived from the current population.
+    advice_ = currentAdvice();
     const std::size_t actors = citizens_.size();
     for (std::size_t i = 0; i < actors; ++i) {
         Citizen& citizen = citizens_[i];
         if (!citizen.alive) continue;
-        const Observation before = observe(citizen);
+        const BrainInput before = compose(observe(citizen), advice_);
         const ActionMask allowed = legalActions(citizen);
         const float previousComfort = comfort(citizen);
         const float exploration = .025f + .035f * (1 - citizen.cooperation);
@@ -621,7 +808,7 @@ void Simulation::step() {
             reward -= 1.5f;
         }
         citizen.lastReward = std::clamp(reward, -2.0f, 2.0f);
-        citizen.brain.learn(before, citizen.action, citizen.lastReward, observe(citizen), legalActions(citizen), !citizen.alive);
+        citizen.brain.learn(before, citizen.action, citizen.lastReward, compose(observe(citizen), advice_), legalActions(citizen), !citizen.alive);
         ++stats_.learningUpdates;
     }
     refreshStatistics();
@@ -633,6 +820,7 @@ void Simulation::step() {
 
 void Simulation::refreshStatistics() {
     stats_.population = 0; stats_.homes = 0; stats_.farms = 0;
+    stats_.generation = 0;
     stats_.wellbeing = 0; stats_.food = 0; stats_.cooperation = 0;
     for (const Citizen& citizen : citizens_) {
         if (!citizen.alive) continue;
@@ -662,6 +850,8 @@ std::uint64_t Simulation::digest() const {
     auto string = [&](const std::string& value) { add(value.size()); bytes(value.data(), value.size()); };
     add(config_.seed); add(config_.founders); add(config_.fertility); add(config_.cooperation); add(config_.hazards);
     add(tick_); add(nextId_);
+    add(core_ ? core_->digest() : 0ull);
+    for (float value : advice_) add(value);
     auto rngCopy = rng_;
     for (std::size_t i = 0; i < std::mt19937::state_size; ++i) add(rngCopy());
     for (const Tile& ground : tiles_) {

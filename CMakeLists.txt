@@ -11,7 +11,11 @@ target_include_directories(society_core PUBLIC src)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(society_core PUBLIC -Wall -Wextra -Wpedantic)
     if(PIXEL_SOCIETY_SANITIZE)
-        target_compile_options(society_core PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+        # AddressSanitizer and UBSan remain fully enabled at -O1. Debug's
+        # default -O0 makes the sustained 82-input neural-world coverage too
+        # slow to complete in CI, while modest optimization preserves useful
+        # source-level diagnostics and keeps the sanitizer suite practical.
+        target_compile_options(society_core PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer -O1)
         target_link_options(society_core PUBLIC -fsanitize=address,undefined)
     endif()
 endif()

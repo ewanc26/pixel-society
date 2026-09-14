@@ -1,9 +1,12 @@
 #include "simulation.hpp"
 #include "ticker.hpp"
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -26,14 +29,96 @@ template<class F> void rejects(F&& operation, const std::string& message) {
     try { operation(); } catch (const std::invalid_argument&) { rejected = true; }
     require(rejected, message);
 }
+
+struct ObservationSurvey {
+    std::array<float, InputCount> minimum{};
+    std::array<float, InputCount> maximum{};
+    int samples = 0;
+
+    void add(const Observation& observation) {
+        for (int i = 0; i < InputCount; ++i) {
+            const float value = observation[static_cast<std::size_t>(i)];
+            require(std::isfinite(value) && value >= 0.0f && value <= 1.0f,
+                    "every rich observation feature must be finite and normalized");
+            if (samples == 0) minimum[static_cast<std::size_t>(i)] = maximum[static_cast<std::size_t>(i)] = value;
+            else {
+                minimum[static_cast<std::size_t>(i)] = std::min(minimum[static_cast<std::size_t>(i)], value);
+                maximum[static_cast<std::size_t>(i)] = std::max(maximum[static_cast<std::size_t>(i)], value);
+            }
+        }
+        ++samples;
+    }
+
+    int nonzero(int first = 0, int last = InputCount) const {
+        int count = 0;
+        for (int i = first; i < last; ++i)
+            if (maximum[static_cast<std::size_t>(i)] > 0.001f) ++count;
+        return count;
+    }
+
+    int varying(int first = 0, int last = InputCount) const {
+        int count = 0;
+        for (int i = first; i < last; ++i)
+            if (maximum[static_cast<std::size_t>(i)] - minimum[static_cast<std::size_t>(i)] > 0.001f) ++count;
+        return count;
+    }
+};
+
+void collectObservations(const Simulation& sim, ObservationSurvey& survey) {
+    int living = 0;
+    for (const auto& citizen : sim.citizens()) {
+        if (!citizen.alive) continue;
+        survey.add(sim.observe(citizen));
+        ++living;
+    }
+    require(living > 0, "a normal seeded world must expose citizens to observe");
+}
+
 void neural() {
+    require(InputCount == 82, "the policy must expose 82 input features");
+    require(HiddenOneCount == 56 && HiddenTwoCount == 28,
+            "the policy must retain its 56 then 28 hidden-neuron architecture");
+    require(ActionCount == 12, "the policy must retain twelve ranked intentions");
+    require(BrainInputCount == InputCount + ActionCount,
+            "an individual policy joins its observation with one advisory value per action");
+
+    // The society core is the shared wide neural AI behind action selection.
+    require(SocietyCore::parameterCount() >= 10'000'000,
+            "the society core neural AI must contain at least ten million parameters");
+    require(Brain::parameterCount() < SocietyCore::parameterCount(),
+            "the shared society core is the largest network in the system");
+    auto coreSeven = std::make_unique<SocietyCore>(7);
+    auto coreSevenAgain = std::make_unique<SocietyCore>(7);
+    auto coreEight = std::make_unique<SocietyCore>(8);
+    CoreInput society{};
+    society[0] = 0.8f; society[21] = 0.5f; society[39] = 1.0f;
+    const Values coreAdvice = coreSeven->advise(society);
+    require(coreSeven->advise(society) == coreSevenAgain->advise(society),
+            "seeded society core inference must reproduce");
+    require(coreSeven->advise(society) != coreEight->advise(society),
+            "different seeds must vary the society core");
+    for (float value : coreAdvice) {
+        require(std::isfinite(value) && value >= 0.0f && value <= 1.0f,
+                "core advisory values are normalized for the individual networks");
+    }
+    const auto civAlpha = makeSocietyCore(7);
+    require(civAlpha->digest() == makeSocietyCore(7)->digest(),
+            "a civilization's society core is deterministic for its seed");
+    const auto civBeta = makeSocietyCore(8);
+    require(civAlpha->digest() != civBeta->digest(),
+            "different civilization seeds must train different society cores");
+    require(civAlpha->advise(society) != civBeta->advise(society),
+            "different civilizations must advise their citizens differently");
+
     Brain brain(7), same(7), other(8);
     Observation obs{}; obs[0] = 0.8f; obs[5] = 0.6f; obs[7] = 0.7f;
-    require(brain.predict(obs) == same.predict(obs), "seeded inference must reproduce");
-    require(brain.predict(obs) != other.predict(obs), "different seeds must vary networks");
-    const auto before = brain.predict(obs);
-    for (int i = 0; i < 300; ++i) brain.train(obs, Action::Eat, 1.5f);
-    require(std::abs(brain.predict(obs)[2] - 1.5f) < std::abs(before[2] - 1.5f) * 0.1f,
+    Values advice{}; advice.fill(0.5f);
+    const BrainInput input = compose(obs, advice);
+    require(brain.predict(input) == same.predict(input), "seeded inference must reproduce");
+    require(brain.predict(input) != other.predict(input), "different seeds must vary networks");
+    const auto before = brain.predict(input);
+    for (int i = 0; i < 300; ++i) brain.train(input, Action::Eat, 1.5f);
+    require(std::abs(brain.predict(input)[2] - 1.5f) < std::abs(before[2] - 1.5f) * 0.1f,
             "backpropagation must learn the target, not only count updates");
     require(brain.updates() == 300, "training updates must be recorded");
     ActionMask legal{}; legal.fill(true);
@@ -41,27 +126,105 @@ void neural() {
     Brain preferGather(12), preferDrink(12);
     for (int n = 0; n < 200; ++n) {
         for (int a = 0; a < ActionCount; ++a) {
-            preferGather.train(obs, static_cast<Action>(a), a == 1 ? 2.f : -1.f);
-            preferDrink.train(obs, static_cast<Action>(a), a == 3 ? 2.f : -1.f);
+            preferGather.train(input, static_cast<Action>(a), a == 1 ? 2.f : -1.f);
+            preferDrink.train(input, static_cast<Action>(a), a == 3 ? 2.f : -1.f);
         }
     }
-    require(preferGather.choose(obs, legal, 0, rng) == Action::Gather, "learned weights must control decisions");
-    require(preferDrink.choose(obs, legal, 0, rng) == Action::Drink, "changing learned weights must change intention");
+    require(preferGather.choose(input, legal, 0, rng) == Action::Gather, "learned weights must control decisions");
+    require(preferDrink.choose(input, legal, 0, rng) == Action::Drink, "changing learned weights must change intention");
     legal.fill(false); legal[4] = true;
     for (int n = 0; n < 100; ++n)
-        require(brain.choose(obs, legal, n % 2 ? 1 : 0, rng) == Action::Rest, "exploration and inference must both respect legality");
+        require(brain.choose(input, legal, n % 2 ? 1 : 0, rng) == Action::Rest, "exploration and inference must both respect legality");
     legal.fill(false);
-    rejects([&] { brain.choose(obs, legal, 0, rng); }, "no legal action must fail explicitly");
+    rejects([&] { brain.choose(input, legal, 0, rng); }, "no legal action must fail explicitly");
     auto inherited = brain;
     require(inherited.fingerprint() == brain.fingerprint(), "children can inherit exact trained weights");
     inherited.mutate(rng);
     require(inherited.fingerprint() != brain.fingerprint(), "mutation must actually change policy");
     legal.fill(true);
     auto previous = brain.fingerprint();
-    brain.learn(obs, Action::Eat, -0.7f, obs, legal);
+    brain.learn(input, Action::Eat, -0.7f, input, legal);
     require(brain.fingerprint() != previous, "online temporal difference update must affect weights");
-    for (int i = 0; i < 2000; ++i) brain.learn(obs, Action::Eat, i % 2 ? 1.f : -1.f, obs, legal);
-    for (float value : brain.predict(obs)) require(std::isfinite(value), "online learning must stay finite");
+    for (int i = 0; i < 2000; ++i) brain.learn(input, Action::Eat, i % 2 ? 1.f : -1.f, input, legal);
+    for (float value : brain.predict(input)) require(std::isfinite(value), "online learning must stay finite");
+
+    // The society core's advisory channel must genuinely reach the individual
+    // policy's learned action values, not sit as a disconnected input tail.
+    {
+        const int farm = static_cast<int>(Action::Farm);
+        Brain adviceSensitive(606);
+        Values lowAdvice = advice; lowAdvice[farm] = 0.05f;
+        Values highAdvice = advice; highAdvice[farm] = 0.95f;
+        for (int i = 0; i < 400; ++i) {
+            adviceSensitive.train(compose(obs, lowAdvice), Action::Farm, -1.25f, 0.02f);
+            adviceSensitive.train(compose(obs, highAdvice), Action::Farm, 1.25f, 0.02f);
+        }
+        const float afterLow = adviceSensitive.predict(compose(obs, lowAdvice))[farm];
+        const float afterHigh = adviceSensitive.predict(compose(obs, highAdvice))[farm];
+        require(afterHigh - afterLow > 0.35f,
+                "training must make action values discriminate the society core advisory input");
+    }
+
+    // The final observation sensor (a previous-action bit) is deliberately
+    // isolated while the advice channels are fixed: this catches networks that
+    // allocate the advertised high-dimensional observation but never connect
+    // its deep tail to the learned action values.
+    {
+        Observation tailLow{};
+        for (int i = 0; i < InputCount - 1; ++i)
+            tailLow[static_cast<std::size_t>(i)] = static_cast<float>((i * 17) % 31) / 30.0f;
+        Observation tailHigh = tailLow;
+        tailLow.back() = 0.05f;
+        tailHigh.back() = 0.95f;
+        const BrainInput low = compose(tailLow, advice);
+        const BrainInput high = compose(tailHigh, advice);
+        Brain tailSensitive(909);
+        const float beforeLow = tailSensitive.predict(low)[static_cast<int>(Action::Farm)];
+        const float beforeHigh = tailSensitive.predict(high)[static_cast<int>(Action::Farm)];
+        for (int i = 0; i < 650; ++i) {
+            tailSensitive.train(low, Action::Farm, -1.25f, 0.02f);
+            tailSensitive.train(high, Action::Farm, 1.25f, 0.02f);
+        }
+        const float afterLow = tailSensitive.predict(low)[static_cast<int>(Action::Farm)];
+        const float afterHigh = tailSensitive.predict(high)[static_cast<int>(Action::Farm)];
+        require(afterHigh - afterLow > 0.35f,
+                "training must make an action value discriminate observations that differ only at input 81");
+        require(std::abs(afterLow - beforeLow) > 0.05f || std::abs(afterHigh - beforeHigh) > 0.05f,
+                "deep-tail training must materially change predicted action values");
+    }
+}
+
+void observations() {
+    Config config;
+    config.seed = 9182;
+    Simulation sim(config);
+    ObservationSurvey initial;
+    collectObservations(sim, initial);
+    require(initial.samples >= 2, "the normal world must contain multiple individual perspectives");
+    // Empty infrastructure and the absence of an active disaster are valid
+    // initial conditions, so this asks for broad live data without demanding
+    // every optional world signal at tick zero.
+    require(initial.nonzero() >= InputCount * 11 / 20,
+            "a new world must populate a substantial portion of its observation data");
+    require(initial.nonzero(InputCount / 2) >= InputCount / 5,
+            "a new world must expose substantial high-index sensor data");
+    require(initial.varying() >= 8,
+            "individual citizens must see meaningfully different surroundings and states");
+
+    ObservationSurvey evolving = initial;
+    for (int tick = 0; tick < 240; ++tick) {
+        sim.step();
+        if (tick % 12 == 11) collectObservations(sim, evolving);
+    }
+    require(evolving.samples > initial.samples, "an autonomous world must keep producing observation samples");
+    require(evolving.nonzero() >= InputCount * 2 / 3,
+            "individual and environmental data must activate most rich observation features over time");
+    require(evolving.nonzero(InputCount / 2) >= InputCount / 4,
+            "the high-index half must carry substantial live world data over time");
+    require(evolving.varying() >= InputCount / 3,
+            "the observation vector must evolve across changing citizens and environment");
+    require(evolving.varying(InputCount / 2) >= InputCount / 8,
+            "high-index sensors must respond as the autonomous world evolves");
 }
 void timing() {
     using namespace std::chrono_literals;
@@ -98,7 +261,8 @@ void invariants(const Simulation& sim) {
         require(std::isfinite(c.health) && c.health > 0 && c.health <= 1, "living health valid");
         require(std::isfinite(c.food) && c.food >= 0 && std::isfinite(c.wood) && c.wood >= 0, "inventories finite nonnegative");
         for (float input : sim.observe(c)) require(std::isfinite(input) && input >= 0 && input <= 1, "features normalized");
-        for (float output : c.brain.predict(sim.observe(c))) require(std::isfinite(output), "network values finite");
+        for (float output : c.brain.predict(compose(sim.observe(c), sim.advice())))
+            require(std::isfinite(output), "network values finite");
     }
     require(alive == s.population, "population statistics match actual citizens");
     require(s.population == sim.config().founders + s.births - s.deaths, "births and deaths conserve population");
@@ -163,7 +327,8 @@ void extremes() {
 int main() {
     try {
         timing(); std::cout << "PASS fixed5Hz timing and catchup\n";
-        neural(); std::cout << "PASS neural inference, learning, masks, inheritance\n";
+        neural(); std::cout << "PASS deep neural inference, learning, masks, inheritance\n";
+        observations(); std::cout << "PASS 82-feature individual and environmental observations\n";
         society(); std::cout << "PASS autonomous society, event ranks, determinism\n";
         extremes(); std::cout << "PASS invalid and extreme configurations\n";
         return 0;

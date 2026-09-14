@@ -267,11 +267,29 @@ void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
 void metric(Canvas& out, int x, const std::string& name, const std::string& value, Color color = Cream) {
     out.rect(x,56,88,35,Panel); out.text(x+8,63,name,Muted); out.text(x+8,76,value,color);
 }
-void needBar(Canvas& out, int y, const std::string& label, float value, Color color) {
+void compactMeter(Canvas& out, int x, int y, const std::string& label, float value, Color color) {
+    out.text(x,y,label,Muted);
+    out.rect(x+42,y+1,44,5,Dark);
+    out.rect(x+42,y+1,static_cast<int>(44*std::clamp(value,0.0f,1.0f)),5,color);
+}
+float sensorMean(const Observation& observation, int first, int count) {
+    float total = 0.0f;
+    for (int i = first; i < first+count; ++i) total += observation[static_cast<std::size_t>(i)];
+    return total / static_cast<float>(count);
+}
+int activeSensors(const Observation& observation, int first, int count) {
+    int active = 0;
+    for (int i = first; i < first+count; ++i)
+        if (observation[static_cast<std::size_t>(i)] > 0.001f) ++active;
+    return active;
+}
+void sensorGroup(Canvas& out, int y, const std::string& label, const Observation& observation,
+                 int first, int count, Color color) {
     out.text(524,y,label,Muted);
-    out.rect(605,y+1,101,5,Dark);
-    out.rect(605,y+1,static_cast<int>(101*std::clamp(value,0.0f,1.0f)),5,color);
-    out.text(716,y,std::to_string(percent(value)),color);
+    out.rect(592,y+1,72,5,Dark);
+    out.rect(592,y+1,static_cast<int>(72*sensorMean(observation,first,count)),5,color);
+    out.text(671,y,std::to_string(activeSensors(observation,first,count))+
+             "/"+std::to_string(count),color);
 }
 void drawInspector(Canvas& out, const Simulation& sim, const View& view) {
     out.rect(512,56,240,224,Panel);
@@ -280,21 +298,45 @@ void drawInspector(Canvas& out, const Simulation& sim, const View& view) {
     if (!c) {
         out.text(524,91,"SELECT A CITIZEN",Cream);
         out.wrap(524,111,"CLICK ANYWHERE ON THE MAP TO FOLLOW THE NEAREST LIVING CITIZEN.",35,3);
-        out.text(524,162,"INDIVIDUAL NEURAL POLICIES",Gold);
-        out.wrap(524,183,"20 SENSES. 24 HIDDEN NEURONS. 12 POSSIBLE ACTIONS. LEARNING AFTER EVERY DECISION.",35,4);
+        out.text(524,168,"INDIVIDUAL POLICIES ON A",Gold);
+        out.text(524,182,"SOCIETY CORE 82>2048>2560>2560>12",Gold);
+        out.wrap(524,202,std::to_string(InputCount)+" LIVE SENSORS + "+std::to_string(ActionCount)+
+                 " ADVISORY CHANNELS. "+std::to_string(HiddenOneCount)+" THEN "+std::to_string(HiddenTwoCount)+
+                 " HIDDEN NEURONS. 12 POSSIBLE ACTIONS. LEARNING AFTER EVERY DECISION.",35,4);
         return;
     }
     out.text(524,85,"#"+std::to_string(c->id)+" / CLAN "+std::to_string(c->clan+1),clanColor(c->clan));
     out.text(680,85,"GEN "+std::to_string(c->generation),Muted);
     if (!c->alive) out.text(524,101,"THIS CITIZEN HAS DIED",Red);
-    else out.text(524,101,"AGE "+decimal(static_cast<float>(c->age)/TicksPerDay,1)+" DAYS",Muted);
-    needBar(out,118,"HEALTH",c->health,Teal);
-    needBar(out,132,"HUNGER",c->hunger,Gold);
-    needBar(out,146,"THIRST",c->thirst,0xff91d3e6);
-    needBar(out,160,"ENERGY",c->energy,Teal);
-    out.text(524,178,"DOING  "+std::string(actionName(c->action)),Cream);
-    out.text(524,193,"20 INPUT > 24 TANH > 12 Q",Muted);
-    const auto values = c->brain.predict(sim.observe(*c));
+    else out.text(524,101,"AGE "+decimal(static_cast<float>(c->age)/TicksPerDay,1)+
+                  " D / "+shortened(actionName(c->action),12),Muted);
+    compactMeter(out,524,116,"HEALTH",c->health,Teal);
+    compactMeter(out,636,116,"HUNGER",c->hunger,Gold);
+    compactMeter(out,524,130,"THIRST",c->thirst,0xff91d3e6);
+    compactMeter(out,636,130,"ENERGY",c->energy,Teal);
+    out.text(524,145,std::to_string(InputCount)+" SENSORS + "+std::to_string(ActionCount)+
+             " ADVICE > "+std::to_string(HiddenOneCount)+" > "+std::to_string(HiddenTwoCount)+
+             " > "+std::to_string(ActionCount)+" Q",Muted);
+    out.text(524,158,"SOCIETY CORE 82>2048>2560>2560>12",Gold);
+    out.text(524,172,"12.0M PARAMS, PER CIVILIZATION",Muted);
+
+    const Observation observation = sim.observe(*c);
+    int valid = 0;
+    for (float value : observation)
+        if (std::isfinite(value) && value >= 0.0f && value <= 1.0f) ++valid;
+    out.text(524,186,"LIVE SENSOR FIELD",Gold);
+    // These are summaries only: no inspector interaction can influence a
+    // citizen. The groups mirror the stable observation contract in order.
+    sensorGroup(out,196,"SELF DRIVE",observation,0,20,Gold);
+    sensorGroup(out,205,"SOC / TIME",observation,20,12,Teal);
+    sensorGroup(out,214,"LOCAL TILE",observation,32,9,0xff91d3e6);
+    sensorGroup(out,223,"NEAR FIELDS",observation,41,22,0xffa9d88b);
+    sensorGroup(out,232,"SOCIAL / MEM",observation,63,19,0xffefad7c);
+    const Color quality = valid == InputCount ? Teal : Red;
+    out.text(524,248,"DATA "+std::to_string(valid)+"/"+std::to_string(InputCount)+
+             " VALID / "+std::to_string(activeSensors(observation,0,InputCount))+" LIVE",quality);
+
+    const auto values = c->brain.predict(compose(observation, sim.advice()));
     const auto legal = sim.legalActions(*c);
     std::array<int,ActionCount> ordered{};
     for (int i = 0; i < ActionCount; ++i) ordered[i] = i;
@@ -302,17 +344,14 @@ void drawInspector(Canvas& out, const Simulation& sim, const View& view) {
         if (legal[a] != legal[b]) return legal[a] > legal[b];
         return values[a] > values[b];
     });
-    for (int i = 0; i < 3; ++i) {
-        const int a = ordered[i], y = 211+i*14;
-        const Color color = legal[a] ? (i == 0 ? Gold : Muted) : Edge;
-        out.text(524,y,shortened(actionName(static_cast<Action>(a)),11),color);
-        out.rect(598,y+1,87,5,Dark);
-        // Q values are expected discounted rewards, not probabilities.
-        const float length = 0.5f+0.5f*std::tanh(values[a]);
-        out.rect(598,y+1,static_cast<int>(87*length),5,color);
-        out.text(694,y,decimal(values[a]),color);
-    }
-    out.text(524,262,"Q / "+std::to_string(c->brain.updates())+" LEARNING UPDATES",Muted);
+    const int best = ordered[0];
+    out.text(524,262,"Q "+shortened(actionName(static_cast<Action>(best)),10),Gold);
+    out.rect(604,263,65,5,Dark);
+    // Q values are expected discounted rewards, not probabilities.
+    const float length = 0.5f+0.5f*std::tanh(values[best]);
+    out.rect(604,263,static_cast<int>(65*length),5,Gold);
+    out.text(676,262,decimal(values[best]),Gold);
+    out.text(524,274,"Q / "+std::to_string(c->brain.updates())+" LEARNING",Muted);
 }
 
 void drawEvents(Canvas& out, const Simulation& sim) {
@@ -433,12 +472,12 @@ void drawHelp(Canvas& out) {
     out.rect(135,93,498,329,Dark); out.frame(135,93,498,329,Edge);
     out.rect(135,93,498,3,Teal);
     out.text(158,113,"AN OBSERVER'S GUIDE",Cream,2);
-    out.wrap(158,145,"THE WORLD ADVANCES FIVE TIMES EACH SECOND. EACH CITIZEN SENSES ITS SURROUNDINGS, CHOOSES AN ACTION WITH ITS NEURAL NETWORK, AND LEARNS FROM THE RESULT.",73,3);
+    out.wrap(158,145,"THE WORLD ADVANCES FIVE TIMES EACH SECOND. EVERY CITIZEN READS 82 LIVE SENSORS PLUS 12 ADVISORY SIGNALS FROM ITS CIVILIZATION'S 12-MILLION-PARAMETER SOCIETY CORE, CHOOSES AN ACTION WITH ITS PERSONAL TWO-HIDDEN-LAYER NETWORK, AND LEARNS FROM THE RESULT.",73,3);
     out.text(158,189,"CLICK MAP",Gold); out.text(284,189,"FOLLOW THE NEAREST LIVING CITIZEN");
     out.text(158,207,"TAB",Gold); out.text(284,207,"FOLLOW THE NEXT LIVING CITIZEN");
     out.text(158,225,"1 / 2 / 3",Gold); out.text(284,225,"LANDSCAPE / RESOURCES / CLANS");
     out.text(158,243,"H / ESC",Gold); out.text(284,243,"CLOSE GUIDE / ESC AGAIN TO QUIT");
-    out.wrap(158,271,"NEURAL Q VALUES ESTIMATE FUTURE REWARD; THEY ARE NOT PROBABILITIES. ONLY FEASIBLE ACTIONS ARE CONSIDERED. LEARNING UPDATES COUNT EACH CITIZEN'S EXPERIENCE.",73,3);
+    out.wrap(158,271,"THE INSPECTOR GROUPS SELF, WORLD, LOCAL, NEARBY AND SOCIAL SENSORS. Q VALUES ESTIMATE FUTURE REWARD; THEY ARE NOT PROBABILITIES.",73,3);
     out.wrap(158,316,"EVENT SCORES ALWAYS RUN FROM 0 TO 100: HIGHER MEANS GREATER IMPACT. THE CHRONICLE SHOWS THE LATEST EVENTS. THE RESOURCE LAYER SHOWS SOIL FERTILITY AND CITIZEN NEED.",73,3);
     out.text(158,365,"THE SIMULATION CONTINUES WHILE THIS GUIDE IS OPEN.",Teal);
     out.text(158,391,"H TO RETURN TO YOUR WORLD",Cream);

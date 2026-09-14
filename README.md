@@ -7,10 +7,16 @@ island, choose its population, resources, cooperation and hazard level, then
 watch its citizens forage, build, farm, share, form new generations and struggle
 to survive. Once the simulation begins, the interface only observes.
 
-Every citizen has an individual **20 → 24 → 12 neural network** that selects
-their intentions and learns from the consequences. The desktop world advances
-at **five game ticks per second**. Every recorded event has an integer
-importance score from **0 to 100**.
+A shared **society core** (82 → 2048 → 2560 → 2560 → 12,
+**12,002,316 trainable parameters**) reads the living population's average
+sensor view once each tick and broadcasts one advisory signal per intention.
+Every citizen combines those 12 advisory channels with its own live view and
+runs a personal **94 → 56 → 28 → 12 neural network** (7,264 parameters) that
+ranks intentions, then learns from the consequences. The 82 raw signals include
+individual needs and inventory, the current tile, nearby resources and hazards,
+settlement and neighbourhood patterns, and seasonal and population context. The
+desktop world advances at **five game ticks per second**. Every recorded event
+has an integer importance score from **0 to 100**.
 
 The terrain, structures, citizens, charts and bitmap lettering are drawn from
 pixels. There are no downloaded graphics, fonts, models, AI services or API keys.
@@ -44,11 +50,15 @@ only changes what you see. Close the window to finish the experiment.
   build, farm, share, socialize, reproduce and attack.
 - Citizens navigate the land and consume actual shared world resources. Homes
   and farms arise from their own work and timber inventories.
+- A shared society core observes the population average every tick and advises
+  every citizen, so personal policies coordinate around society-wide crowding,
+  food security, construction and conflict pressure.
 - Cooperation, competition, inherited traits and learned policies influence
   how the population develops. Children inherit a mutated parental network.
 - Seasonal production and environmental hazards change conditions over time.
-- The observer shows live population, wellbeing, neural action values, history,
-  and scored events. The population is bounded at 256 for predictable performance.
+- The observer shows live population, wellbeing, neural action values, sensor
+  group summaries and data quality, history, and scored events. The population
+  is bounded at 256 for predictable performance.
 
 This is a compact artificial-life society, with authored physical and social
 rules and learned individual decisions. It does not simulate language, formal
@@ -57,11 +67,16 @@ growth, conflict and extinction are outcomes to observe.
 
 ## What the AI actually does
 
-Each citizen runs inference and online backpropagation. A reproducible synthetic
-curriculum prepares the founder policy with basic survival knowledge. During
-play, every intention comes from neural action values or exploratory sampling
-of physically legal actions. The simulation executes movement and interactions
-and returns a reward; the citizen updates its own network.
+A shared **society core** with **12,002,316 parameters** is trained once per
+build (the founder instinct) and shared by every simulated world. Each tick it
+reads the live population-average observation and returns twelve advisory
+signals. Each citizen appends those signals to its own 82 live observations
+(its body and supplies, local terrain and resources, reachable world features,
+nearby social conditions, and longer-running world context), and its personal
+**94 → 56 → 28 → 12** network learns with online backpropagation. Every
+intention comes from neural action values or exploratory sampling of physically
+legal actions. The simulation executes movement and interactions and returns a
+reward; the citizen updates its own network.
 
 The starting curriculum is an authored prior. The model is a small reinforcement
 learning controller, and does not claim human intelligence. Read the
@@ -111,12 +126,17 @@ cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 ```
 
-Tests cover real neural learning and decision changes, legal action masking,
-inheritance, five-tick timing with retained frame debt, seeded determinism,
-autonomous construction and births, resource and population invariants, event
-scores, and extreme starting conditions. The interface smoke test injects SDL
-input through setup and observation controls, and compares the resulting world
-with an unattended simulation to detect accidental player influence.
+Tests cover 82 finite normalized observations across individual and world
+change, a high-index sensor that changes learned action values, deeper neural
+learning and decision changes, legal action masking, inheritance, five-tick
+timing with retained frame debt, seeded determinism, autonomous construction
+and births, resource and population invariants, event scores, and extreme
+starting conditions. The society-core constructor is asserted to be over ten
+million parameters, its training is deterministic across identical seeds, and
+a dedicated check proves per-citizen policies react to the advisory channels.
+The interface smoke test injects SDL input through setup and observation
+controls, and compares the resulting world with an unattended simulation to
+detect accidental player influence.
 
 The CI workflow runs macOS and Linux builds, plus an address/undefined-behaviour
 sanitizer build. See [verification evidence](docs/VERIFICATION.md).
@@ -126,7 +146,7 @@ sanitizer build. See [verification evidence](docs/VERIFICATION.md).
 | File | Responsibility |
 | --- | --- |
 | `src/simulation.*` | World generation, citizens, environment, interactions and events |
-| `src/neural.*` | Inference, backpropagation, founder curriculum and inheritance |
+| `src/neural.*` | Society-core training, inference, backpropagation, founder curriculum and inheritance |
 | `src/ticker.hpp` | Fixed 200 ms simulation clock |
 | `src/ui.cpp` | Pixel rendering, starting conditions and observation controls |
 | `src/main.cpp` | CLI and headless experiments |

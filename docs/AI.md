@@ -1,109 +1,159 @@
 # Citizen neural AI
 
-Each citizen owns a small, trainable neural network written in C++ without a
-machine learning dependency: **20 inputs → 24 tanh hidden units → 12 linear
-action values**. These values rank intentions. The network selects every
-intention during the simulation; the world then executes that intention using
-ordinary movement, collision and resource rules.
+Every simulation ships a shared **society core**: a C++ feedforward network with
+**82 inputs → 2048 tanh units → 2560 tanh units → 2560 tanh units → 12 linear
+outputs**, trained once with a deterministic synthetic curriculum and memoized
+per process. It has **12,002,316 trainable scalar parameters**, including
+biases. Once per tick it reads the live population-average observation vector
+and returns normalized advisory signals for the twelve intentions.
 
-This is an artificial-life controller with online reinforcement learning. It is
-not a language model, a human-level intelligence, or a model trained on real
-societies. Relationships, infrastructure and population emerge from interactions
-between these limited individual controllers and the simulated environment.
+Each living citizen owns a smaller trainable personal network:
+**94 inputs → 56 tanh units → 28 tanh units → 12 linear Q values**,
+**7,264 parameters**. The 94 inputs are the citizen's own 82 live observations
+plus the 12 advisory channels from the shared core. The personal network
+evaluates one set of action values every game tick and learns from the
+consequences of its own selected action.
+
+This is an artificial-life controller, not a language model, a human-level
+intelligence, or a model trained on data about real societies. Its relationships,
+infrastructure and population arise from limited local agents interacting with
+the simulated world.
 
 ## Observation contract
 
-All inputs are finite numbers normalized to `[0, 1]` in this order:
+`InputCount` is 82. Every input is finite and normalized to `[0, 1]`; nonfinite
+values become zero and values outside the interval are clamped. Indices 0–19
+are retained from the first model so saved simulation assumptions and basic
+survival semantics remain stable.
 
-| Index | Input |
+| Indices | Measurements |
 | --- | --- |
-| 0 | Hunger |
-| 1 | Thirst |
-| 2 | Fatigue (one minus energy) |
-| 3 | Social need (one minus social satisfaction) |
-| 4 | Health deficit |
-| 5 | Carried food divided by 10 |
-| 6 | Carried wood divided by 10 |
-| 7 | Cooperation trait |
-| 8 | Aggression trait |
-| 9 | Age divided by 6,000 ticks |
-| 10 | Proximity to forage |
-| 11 | Proximity to water |
-| 12 | Proximity to forest |
-| 13 | Proximity to a home |
-| 14 | Proximity to a farm |
-| 15 | Proximity to another citizen |
-| 16 | Fire on the current tile |
-| 17 | Seasonal yield |
-| 18 | Birth readiness |
-| 19 | Fertility of the current tile |
+| 0–4 | Hunger, thirst, fatigue (`1 - energy`), social need (`1 - social`), health deficit (`1 - health`) |
+| 5–9 | Food inventory / 10, wood inventory / 10, cooperation trait, aggression trait, age / 6,000 ticks |
+| 10–15 | Reachable proximity to forage, water, forest, home, farm and another citizen (`1 / (1 + path distance)`) |
+| 16–19 | Current-tile fire, season yield, birth readiness, current-tile fertility |
+| 20 | Most recent bounded reward mapped from `[-2, 2]` to `[0, 1]` |
+| 21–27 | Population / 256; home capacity coverage (homes × 3 / population); farm capacity coverage (farms × 2 / population); communal food security (carried food / population × 4); mean wellbeing; mean cooperation; highest generation / 8 |
+| 28–31 | One-hot season: spring, summer, autumn, winter |
+| 32–36 | Current-tile food / 8, wood / 5, traffic, is-home, is-farm |
+| 37–40 | One-hot terrain: sand, grass, forest, rock. Citizens never occupy water, so it does not use an input bit. |
+| 41–51 | Radius-2 square means: food / 8, wood / 5, fertility, fire, traffic, home density, farm density, people-per-tile density, living-neighbour mean cooperation, mean aggression, Simpson clan diversity |
+| 52–62 | The same eleven measurements across a radius-5 square |
+| 63–67 | Nearest reachable living citizen's hunger, food / 10, cooperation, aggression and social need; all zero when none exists |
+| 68–69 | Proximity to nearest reachable same-clan and different-clan citizen (`1 / (1 + Manhattan distance)`), zero when absent |
+| 70–81 | One-hot previous action: Wander, Gather, Eat, Drink, Rest, Chop, Build, Farm, Share, Socialize, Reproduce, Attack |
 
-Proximity is `1 / (1 + distance)` for an available target, and zero when no target
-is found. A high proximity therefore means a nearby target. Values outside the
-contract are clamped; nonfinite input values become zero.
+The radius summaries give a citizen both immediate and neighbourhood-scale data:
+it can distinguish a bare tile within a food-rich settlement from a food-rich
+tile surrounded by danger, crowding or poor infrastructure. Global coverage,
+security and generation measurements let its learned policy respond to the
+state of the society instead of only its own needs. The previous-action bits
+are state, not a command: the network can learn either to continue or abandon
+an intention.
+
+## Society advisory core
+
+`CoreAdviceCount` is 12, matching one signal per intention. `BrainInputCount`
+is 94 = the 82 observation bits plus 12 advisory channels. Each tick the
+simulation measures the mean observation vector of the living population, runs
+the society core on that average, clamps each raw output to `[-3.5, 3.5]` and
+rescales to `[0, 1]`, and appends the twelve signals below the citizen's own
+observation bits. `compose(observation, advice)` forms the full 94-wide brain
+input used for every choice, learning update and mutation check.
+
+`makeSocietyCore()` is memoized: the core is trained exactly once per process
+with a fixed seed regardless of how many simulations are constructed, so every
+world in the process shares identical instincts. Training uses Xavier
+initialization and a multi-output curriculum of 64 epochs over two passes of a
+tribe-mean sample set at learning rates 0.05 and 0.025, fitting all 12 outputs
+together. Because the core observes the flattened population average, its
+signals let scattered personal policies coordinate around society-wide crowding,
+food security, construction and conflict pressure. The core is shared read-only;
+citizens never train it.
+
+Founder brains are prepared with `makeFounderBrain(seed, core)`. The
+founder curriculum cycles the core over twelve similarly-programmed
+population-average scenarios so early networks learn to use the advisory
+channels as well as their own 82 sensors. Advisory signals are live state, not
+commands: the personal network still chooses among physically legal actions and
+learns from the outcome of whatever it actually did.
 
 ## Intentions and execution
 
-Output order is `Wander`, `Gather`, `Eat`, `Drink`, `Rest`, `Chop`, `Build`, `Farm`,
-`Share`, `Socialize`, `Reproduce`, `Attack`. The controller uses an epsilon-greedy
-choice: it usually selects the highest network value among legal intentions,
-and sometimes explores a uniformly sampled legal intention.
+Outputs are ordered `Wander`, `Gather`, `Eat`, `Drink`, `Rest`, `Chop`, `Build`,
+`Farm`, `Share`, `Socialize`, `Reproduce`, `Attack`. A value is a relative Q
+estimate, not a probability or event score.
 
-The legality mask represents physical prerequisites, such as possessing food
-to eat or enough timber to build. Illegal intentions are excluded from both
-greedy and exploratory selection. An empty mask is a caller error; the world
-always provides at least one legal intention. There is no hunger threshold or
-script in the choice function that replaces the neural decision.
+The controller chooses epsilon-greedily among physically legal actions: it
+usually takes the legal action with the highest neural value and sometimes
+samples a uniformly random legal action. The legality mask excludes impossible
+actions from both paths. An empty mask is a caller error; the world always
+offers a living citizen at least one legal action.
 
-Movement toward an intention's target and resolving an action are world
-mechanics. For example, choosing Drink can take several ticks of travel before
-reaching water, and choosing Reproduce does not guarantee a birth. The network
-is evaluated again each game tick, so an intention can change before arrival.
+There is no hunger threshold, urgency rule, or scripted fallback in the choice
+function. Movement, collision, resource use and interactions are world
+mechanics after the neural decision. Choosing Drink may involve several ticks
+of travel, for example, and the brain is evaluated again on every tick.
 
 ## Founder preparation and inheritance
 
-`makeFounderBrain(seed)` first initializes Xavier-distributed weights and then
-trains on 8,000 reproducible synthetic observations, with a target for each of
-the 12 actions. Targets teach basic survival, avoiding fire, gathering supplies,
-construction, farming, sharing, social contact and reproduction. Aggression and
-cooperation affect their respective targets. The broad curriculum includes both
-quiet daily life and emergencies.
+`makeFounderBrain(seed, core)` uses Xavier initialization and a compact
+deterministic synthetic curriculum over the founder's own sparse observation
+space, keyed to the shared core's advisory channels. It creates 3,072 stratified
+observations (two passes of 1,536): ordinary life, scarcity, emergencies,
+construction opportunities, farming, sharing, social contact, reproduction and
+conflict. The examples use the full 82-bit observation layout plus the core's
+advisory signals, including categorical seasons, terrain and prior actions,
+correlated local and global conditions, and deliberately repeated rare
+scenarios.
 
-These training targets are authored priors, not knowledge discovered from
-scratch. They are evaluated only while preparing the founder model; subsequent
-choices use the actual network weights. Founders share this prepared starting
-policy with individual mutations. Children inherit a parent's learned policy
-with Gaussian mutations, so behaviour can change through both lifetime learning
-and inheritance. The random seed controls initialization and mutation.
+Each curriculum optimizer step evaluates the deep network once and fits all
+12 output targets together. This multi-output update replaces the old costly
+per-action bootstrap loop while still giving founders a useful survival and
+settlement prior. Targets reward survival, fire avoidance, resource gathering,
+construction, cultivation, support, social contact and viable reproduction;
+cooperation, aggression, nearby citizens and clan context influence the social
+targets. These targets exist only while preparing founders. Runtime selection
+uses the network weights.
 
-## Learning during the simulation
+Founders copy the prepared policy and receive small individual mutations.
+Children copy a parent's current learned policy and receive Gaussian mutations,
+so both lifetime learning and inheritance change later generations. A brain's
+digest includes every parameter bit and its update count; its fingerprint
+includes every layer and bias. With the same build, seed, choices and mutation
+stream, copied and mutated policies are deterministic.
 
-After an intention executes, its citizen receives a reward reflecting the
-result. The network is updated using the temporal-difference target:
+## Online reinforcement learning
+
+After an action executes, the citizen receives a bounded reward and updates its
+own selected Q value with temporal-difference learning:
 
 ```text
-target = reward + 0.85 × max Q(next observation, legal next intention)
+target = reward + 0.85 × max Q(next composed input, legal next action)
 ```
 
 Terminal transitions omit the future term. Rewards are bounded to `[-2, 2]`,
-targets to `[-4, 4]`, and the online learning rate is `0.008`. Backpropagation
-updates the selected output's weights and bias and the shared hidden layer,
-using the derivative of tanh and the original output weights from that forward
-pass. The error gradient is clipped to `[-2, 2]`, and parameters are bounded to
-keep long runs finite. `Brain::train` reports the squared prediction error
-before its update. The update counter includes bootstrap training.
+targets to `[-4, 4]`, and online learning uses a rate of `0.008`. `Brain::train`
+computes the squared prediction error before modifying the model, clips the
+output gradient to `[-2, 2]`, then backpropagates it through the 28-unit and
+56-unit tanh layers using weights from the same forward pass. It updates the
+selected output head and both shared hidden layers. Parameter values are bounded
+to keep long autonomous runs finite.
 
-The model has no replay buffer, separate target network, recurrent memory,
-language, institutions planner, or persistent relationship embedding. Online
-learning with a small shared hidden layer can interfere with previous skills;
-survival and population growth are not guaranteed. The society can cooperate,
-fight, overbuild, exhaust resources or die out. Seeded runs are reproducible
-within a build; floating-point libraries and standard random distributions may
-produce different outcomes on different toolchains.
+Founder multi-output training records one optimizer update per observation.
+The public `train` and `learn` APIs each record one update per call. Inference,
+training and mutation use fixed-size arrays with no per-decision heap allocation,
+which keeps the 256-citizen population practical at five game ticks per second.
+
+The model has no replay buffer, target network, recurrent hidden state, language,
+institution planner or persistent relationship embedding. Online learning can
+interfere with earlier behaviour. A society can cooperate, fight, overbuild,
+exhaust resources or die out; survival and growth are outcomes rather than
+guarantees. Reproducibility is within a build: floating-point math and standard
+normal-distribution implementations can differ across toolchains.
 
 ## Event importance is separate
 
-Each recorded world event has an integer importance score from **0 to 100**.
-That scale describes the event's simulated impact and is separate from a
-citizen's neural Q values or reinforcement reward. Q values are relative
-predictions used to select intentions, not probabilities or event ratings.
+Every recorded world event has an integer importance score from **0 to 100**.
+That score describes simulated impact and is independent of neural Q values and
+reinforcement rewards. Q values rank intentions; they do not rate events.

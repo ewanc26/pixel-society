@@ -59,11 +59,15 @@ struct Statistics {
 };
 struct HistoryPoint { std::uint64_t tick; int population; float wellbeing; };
 
-// Input contract: hunger, thirst, fatigue, social need, health deficit,
-// food inventory/10, wood inventory/10, cooperation, aggression, age/6000,
-// proximity to forage, water, forest, home, farm, neighbours (1/(1+distance)),
-// local fire, season yield (0..1), birth readiness, local fertility.
-// All observation components are finite and normalized to [0,1].
+// Neural observation contract. Ranges [0,19] preserve the original survival
+// inputs: hunger, thirst, fatigue, social need, health deficit, food/10,
+// wood/10, cooperation, aggression, age/6000, forage/water/forest/home/farm/
+// neighbour proximity, local fire, seasonal yield, birth readiness and local
+// fertility. [20,27] add recent reward and society-wide capacity/wellbeing;
+// [28,31] are a season one-hot; [32,40] describe the current tile; [41,51]
+// and [52,62] summarize radius-two and radius-five square neighborhoods;
+// [63,69] describe nearest social contacts; and [70,81] encode the most
+// recently selected action. All components are finite and normalized to [0,1].
 class Simulation {
 public:
     explicit Simulation(Config config = {});
@@ -80,9 +84,17 @@ public:
     ActionMask legalActions(const Citizen& citizen) const;
     std::string seasonName() const;
     float seasonYield() const;
+    // This civilization's society core and the advisory values derived from it
+    // this tick. The core is trained from the world seed, so different seeds
+    // give different civilizations distinct collective instincts.
+    const SocietyCore* core() const { return core_.get(); }
+    const Values& advice() const { return advice_; }
     // Reproducibility digest includes the world, residents, event history and learned policy state.
     std::uint64_t digest() const;
 private:
+    std::shared_ptr<SocietyCore> core_;
+    Values advice_ = {};
+    Values currentAdvice() const;
     Config config_;
     std::mt19937 rng_;
     std::uint64_t tick_ = 0;

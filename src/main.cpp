@@ -146,7 +146,9 @@ int main(int argc, char** argv) {
                   << ",\"homes\":" << s.homes << ",\"farms\":" << s.farms
                   << ",\"generation\":" << s.generation << ",\"wellbeing\":" << s.wellbeing
                   << ",\"decisions\":" << s.decisions << ",\"learning_updates\":" << s.learningUpdates
-                  << ",\"events\":" << s.eventCount << ",\"digest\":" << simulation.digest()
+                  << ",\"events\":" << s.eventCount << ",\"core_parameters\":" << pixels::SocietyCore::parameterCount()
+                  << ",\"citizen_parameters\":" << pixels::Brain::parameterCount()
+                  << ",\"digest\":" << simulation.digest()
                   << ",\"actions\":{";
         for (int a = 0; a < pixels::ActionCount; ++a) {
             if (a) std::cout << ',';

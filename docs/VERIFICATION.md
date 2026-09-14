@@ -1,8 +1,58 @@
 # Verification record
 
-This record describes the checks run for the initial public release on macOS
-with AppleClang, CMake and SDL2. It is a reproducibility aid, not a promise that
-every random starting condition will thrive.
+This record describes the verification plan and the historical checks run for
+the initial public release on macOS with AppleClang, CMake and SDL2. It is a
+reproducibility aid, not a promise that every random starting condition will
+thrive.
+
+## Rich neural observation checks
+
+The controller is deliberately tested through its public architecture
+constants rather than only described that way. The core suite asserts the
+**society core** is `82 → 2048 → 2560 → 2560 → 12` with
+`SocietyCore::parameterCount() >= 10,000,000` (actual value: 12,002,316), and
+that the personal network is `94 → 56 → 28 → 12` (7,264 parameters) over 82
+observation bits plus 12 core advisory channels. It then exercises all 82
+observation positions through a normal seeded world. It checks that every value
+is finite and normalized, that substantial data exists in both the lower and
+high-index halves at the start, and that broad individual/world sampling
+activates and changes a large portion of the vector during autonomous ticks.
+Empty buildings or the absence of a disaster are accepted as legitimate initial
+conditions, so the check measures coverage rather than demanding every optional
+condition at tick zero.
+
+The deep-tail regression check creates two observations that differ only at
+input 81. It trains a single action value toward opposite targets and requires
+the resulting values to separate. This catches a disconnected final feature or
+a shallow implementation that silently ignores the high-index observation
+data. A companion advisory-channel check trains identical personal networks
+against a core advice of 0.05 versus 0.95 on the farm intention and requires
+the learned action values to separate, proving that the shared core's signals
+really change per-citizen policy. The society core itself asserts deterministic
+training across identical seeds and divergent behaviour across different seeds.
+The ordinary learning, action-mask, mutation, temporal-difference and long-world
+checks still run alongside these.
+
+The desktop observer now renders both network architectures from the same public
+constants, five groups covering the ordered observation contract, and a live
+finite/normalized sensor count. Its SDL smoke scenario verifies that this
+inspector, selection, layers and guide remain observation-only after start.
+
+Run the full current verification after changes with:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+./build/pixel-society --smoke-test --screenshot build/observatory.bmp
+
+cmake -S . -B build-sanitize -DPIXEL_SOCIETY_GUI=OFF \
+  -DPIXEL_SOCIETY_SANITIZE=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-sanitize --parallel
+ctest --test-dir build-sanitize --output-on-failure
+```
+
+## Initial public-release snapshot
 
 ## Automated checks
 
@@ -13,13 +63,14 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 
-5 / 5 tests passed in 7.11 seconds
+5 / 5 tests passed in 83.95 seconds
 ```
 
-Those tests cover neural inference and backpropagation, action masking,
-mutation/inheritance, the fixed 200 ms clock and catch-up debt, seeded
-determinism, autonomous construction and reproduction, score bounds, world
-invariants, invalid input and the SDL observer flow.
+Those tests cover neural inference and backpropagation, the ten-million-plus
+parameter society core and its deterministic training, advice-channel
+sensitivity, action masking, mutation/inheritance, the fixed 200 ms clock and
+catch-up debt, seeded determinism, autonomous construction and reproduction,
+score bounds, world invariants, invalid input and the SDL observer flow.
 
 The instrumented core build also completed:
 
@@ -29,7 +80,7 @@ cmake -S . -B build-sanitize -DPIXEL_SOCIETY_GUI=OFF \
 cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 
-4 / 4 tests passed in 46.65 seconds
+4 / 4 tests passed in 67.06 seconds
 ```
 
 The sanitizer configuration keeps the same test categories but uses a shorter
@@ -47,13 +98,16 @@ observer:
 ```
 
 It represents 1,200 simulated seconds (20 game days). On the release build it
-finished with 256 citizens, 222 births, 14 deaths, generation 4, 97.09%
-wellbeing, 1,372,594 neural decisions and 1,372,607 learning updates. Every one
-of the twelve intentions had a nonzero action count. The JSONL log contained
-7,638 scored events; a range check found zero scores outside 0–100.
+finished with 256 citizens, 245 births, 37 deaths, generation 5, 94.19%
+wellbeing, 1,357,115 neural decisions and 1,357,117 learning updates, and a
+shared society core of 12,002,316 parameters. Every one of the twelve
+intentions had a nonzero action count. The JSONL log contained 98,955 scored
+events; a range check found zero scores outside 0–100. Sharing and conflict
+dominate the chronicle here as the advice-informed policies cooperate and
+compete more actively than the original release.
 
 Two independent runs with those same settings produced the same deterministic
-world digest: `771264245566295619`. Wall-clock duration is intentionally not
+world digest: `10321713796275195855`. Wall-clock duration is intentionally not
 part of the digest or reproducibility claim.
 
 ## Native observer check
