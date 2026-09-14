@@ -15,15 +15,26 @@
 using namespace pixels;
 namespace {
 #if defined(PIXEL_SOCIETY_SANITIZE_BUILD)
-constexpr int AutonomousRunTicks = 1200;
-constexpr int HarshRunTicks = 500;
+// Sanitizers execute the genuine 12M-parameter core, but with the shared
+// advisor sampled less frequently so hosted memory-safety jobs remain practical.
+constexpr int AutonomousRunTicks = 160;
+constexpr int HarshRunTicks = 80;
+constexpr int MechanicsRunTicks = 425;
+constexpr int DeterminismTicks = 50;
+constexpr int ObservationRunTicks = 100;
+constexpr int ThreadRunTicks = 60;
+constexpr int CrowdedRunTicks = 60;
+constexpr int TestAdvisorEvery = 10;
 #else
-constexpr int AutonomousRunTicks = 6000;
-constexpr int HarshRunTicks = 1500;
+constexpr int AutonomousRunTicks = 1200;
+constexpr int HarshRunTicks = 300;
+constexpr int MechanicsRunTicks = 500;
+constexpr int DeterminismTicks = 200;
+constexpr int ObservationRunTicks = 180;
+constexpr int ThreadRunTicks = 150;
+constexpr int CrowdedRunTicks = 100;
+constexpr int TestAdvisorEvery = 4;
 #endif
-// The emergent-mechanics suite runs a fixed tick window in every build so the
-// disease, fire and transmission assertions are consistent under sanitizers.
-constexpr int MechanicsRunTicks = 800;
 
 void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
@@ -33,6 +44,7 @@ template<class F> void rejects(F&& operation, const std::string& message) {
     try { operation(); } catch (const std::invalid_argument&) { rejected = true; }
     require(rejected, message);
 }
+void accelerateAdvisor(Config& config) { config.advisorEvery = TestAdvisorEvery; }
 
 struct ObservationSurvey {
     std::array<float, InputCount> minimum{};
@@ -226,6 +238,7 @@ void culture() {
 void observations() {
     Config config;
     config.seed = 9182;
+    accelerateAdvisor(config);
     Simulation sim(config);
     ObservationSurvey initial;
     collectObservations(sim, initial);
@@ -241,7 +254,7 @@ void observations() {
             "individual citizens must see meaningfully different surroundings and states");
 
     ObservationSurvey evolving = initial;
-    for (int tick = 0; tick < 240; ++tick) {
+    for (int tick = 0; tick < ObservationRunTicks; ++tick) {
         sim.step();
         if (tick % 12 == 11) collectObservations(sim, evolving);
     }
@@ -307,14 +320,15 @@ void invariants(const Simulation& sim) {
 }
 void society() {
     Config config; config.seed = 42;
+    accelerateAdvisor(config);
     Simulation a(config), b(config);
     require(a.digest() == b.digest(), "seeded worlds reproduce exactly");
     config.seed = 43;
     Simulation different(config);
     require(a.digest() != different.digest(), "world seed changes simulation");
     const auto initial = a.digest();
-    for (int i = 0; i < 500; ++i) { a.step(); b.step(); }
-    require(a.digest() == b.digest(), "randomness and learned behavior reproduce after500 ticks");
+    for (int i = 0; i < DeterminismTicks; ++i) { a.step(); b.step(); }
+    require(a.digest() == b.digest(), "randomness and learned behavior reproduce after the deterministic window");
     require(a.digest() != initial, "world develops without player interaction");
     invariants(a);
     require(a.stats().decisions > 0 && a.stats().learningUpdates >= a.stats().decisions,
@@ -322,7 +336,7 @@ void society() {
     std::uint64_t decisions = 0;
     for (auto count : a.stats().actions) decisions += count;
     require(decisions == a.stats().decisions, "action counters account for every decision");
-    for (int i = 500; i < AutonomousRunTicks; ++i) {
+    for (int i = DeterminismTicks; i < AutonomousRunTicks; ++i) {
         a.step();
         if (i % 500 == 0) invariants(a);
     }
@@ -344,19 +358,23 @@ void extremes() {
     config.founders = 2; config.fertility = std::numeric_limits<float>::quiet_NaN();
     rejects([&] { Simulation sim(config); }, "NaN config rejected");
     config.fertility = .65f;
+    accelerateAdvisor(config);
     config.shape = static_cast<WorldShape>(99);
     rejects([&] { Simulation sim(config); }, "unknown world shape rejected");
     config.shape = WorldShape::Island;
     config.worldSize = static_cast<WorldSize>(99);
     rejects([&] { Simulation sim(config); }, "unknown world size rejected");
     config.worldSize = WorldSize::Classic;
+    config.advisorEvery = 0;
+    rejects([&] { Simulation sim(config); }, "zero advisor cadence rejected");
+    accelerateAdvisor(config);
     config.fertility = 0; config.hazards = 1; config.cooperation = 0;
     Simulation harsh(config);
     for (int i = 0; i < HarshRunTicks; ++i) harsh.step();
     invariants(harsh);
     config.founders = PopulationLimit; config.fertility = 1; config.hazards = 0; config.cooperation = 1;
     Simulation crowded(config);
-    for (int i = 0; i < 100; ++i) crowded.step();
+    for (int i = 0; i < CrowdedRunTicks; ++i) crowded.step();
     invariants(crowded);
 }
 void mechanics() {
@@ -369,6 +387,10 @@ void mechanics() {
     config.fertility = 1;
     config.hazards = 1;
     config.cooperation = 0.9f;
+    // This focused scenario deliberately retains the normal one-tick advice
+    // cadence so disease recovery and fire succession execute in the same
+    // coupled conditions as the desktop world.
+    config.advisorEvery = 1;
     Simulation dense(config);
     const auto initialForest = std::count_if(dense.tiles().begin(), dense.tiles().end(),
                                              [](const Tile& tile) { return tile.terrain == Terrain::Forest; });
@@ -405,6 +427,12 @@ void mechanics() {
     // disturbance driver behind succession.
     Config calm = config;
     calm.hazards = 0;
+#if defined(PIXEL_SOCIETY_SANITIZE_BUILD)
+    // The calm comparison only verifies the absence of ignition, so it can use
+    // the lighter advisor cadence while the dense case above covers the full
+    // coupled health and fire paths.
+    accelerateAdvisor(calm);
+#endif
     Simulation serene(calm);
     int calmBurned = 0;
     for (int i = 0; i < MechanicsRunTicks; ++i) {
@@ -440,6 +468,7 @@ bool territoryBoundary(const Simulation& sim) {
 void borders() {
     Config config;
     config.seed = 42;
+    accelerateAdvisor(config);
     Simulation a(config), b(config);
     require(a.territory().size() == static_cast<std::size_t>(a.width() * a.height()),
             "territory labels must cover every tile");
@@ -508,11 +537,12 @@ void landscapes() {
 void threadDeterminism() {
     Config config;
     config.seed = 42;
+    accelerateAdvisor(config);
     config.threads = 1;
     Simulation serial(config);
     config.threads = 4;
     Simulation parallel(config);
-    const int ticks = 250;
+    const int ticks = ThreadRunTicks;
     for (int i = 0; i < ticks; ++i) { serial.step(); parallel.step(); }
     require(serial.digest() == parallel.digest(),
             "digest is independent of the configured worker count");

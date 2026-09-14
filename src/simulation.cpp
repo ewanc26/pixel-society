@@ -46,9 +46,10 @@ Simulation::Simulation(Config config) : config_(config), rng_(config.seed),
         !std::isfinite(config.fertility) || config.fertility < 0 || config.fertility > 1 ||
         !std::isfinite(config.cooperation) || config.cooperation < 0 || config.cooperation > 1 ||
         !std::isfinite(config.hazards) || config.hazards < 0 || config.hazards > 1 ||
+        config.advisorEvery < 1 || config.advisorEvery > TicksPerDay ||
         shape < static_cast<int>(WorldShape::Island) || shape > static_cast<int>(WorldShape::Riverlands) ||
         size < static_cast<int>(WorldSize::Tiny) || size > static_cast<int>(WorldSize::Huge)) {
-        throw std::invalid_argument("Founders must be 2..256; rates must be finite values in [0,1]; world shape and size must be recognized presets");
+        throw std::invalid_argument("Founders must be 2..256; rates must be finite values in [0,1]; advisor cadence must be 1..300; world shape and size must be recognized presets");
     }
     // Configure the process-wide worker pool first so world generation and core
     // training below already run with the requested level of parallelism. The
@@ -1106,7 +1107,10 @@ void Simulation::step() {
     environment();
     epidemiology();
     // This tick's shared advisory context, derived from the current population.
-    advice_ = currentAdvice();
+    // The normal cadence is every tick. Coarser configured cadences preserve
+    // the most recent population advice between updates for long experiments.
+    if (tick_ == 1 || tick_ % static_cast<std::uint64_t>(config_.advisorEvery) == 0)
+        advice_ = currentAdvice();
     const std::size_t actors = citizens_.size();
     for (std::size_t i = 0; i < actors; ++i) {
         Citizen& citizen = citizens_[i];
@@ -1183,7 +1187,7 @@ std::uint64_t Simulation::digest() const {
     auto add = [&](auto value) { bytes(&value, sizeof(value)); };
     auto string = [&](const std::string& value) { add(value.size()); bytes(value.data(), value.size()); };
     add(config_.seed); add(config_.founders); add(config_.fertility); add(config_.cooperation); add(config_.hazards);
-    add(config_.shape); add(config_.worldSize);
+    add(config_.shape); add(config_.worldSize); add(config_.advisorEvery);
     add(tick_); add(nextId_); add(epidemic_);
     add(core_ ? core_->digest() : 0ull);
     for (float value : advice_) add(value);

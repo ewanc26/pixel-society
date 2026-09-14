@@ -81,7 +81,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 
-5 / 5 tests passed in 71.51 seconds
+6 / 6 tests passed in 34.81 seconds
 ```
 
 Those tests cover neural inference and backpropagation, the ten-million-plus
@@ -101,12 +101,14 @@ cmake -S . -B build-sanitize -DPIXEL_SOCIETY_GUI=OFF \
 cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 
-4 / 4 tests passed in 113.18 seconds
+5 / 5 tests passed in 58.87 seconds
 ```
 
 The sanitizer configuration keeps the same test categories but uses a shorter
-sustained society run; the release suite runs the 6,000-tick multigeneration
-scenario. The sanitizer build also exercises the worker pool: simulations run
+sustained society run. Long invariant coverage samples the still-real
+12-million-parameter society core at a coarser configured cadence, while the
+focused disease/fire scenario and UI smoke retain the normal every-tick
+cadence. The sanitizer build also exercises the worker pool: simulations run
 with real threads under AddressSanitizer and UBSan. The CI workflow repeats the
 regular build on macOS and Linux and runs the sanitizer configuration on Linux.
 

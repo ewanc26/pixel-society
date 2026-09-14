@@ -71,6 +71,10 @@ struct Config {
     // Worker threads for the deterministic pool (0 = all available cores).
     // The simulation's trace is independent of this value.
     int threads = 0;
+    // Recompute the shared society-core advice every N ticks. One keeps the
+    // normal live 5 Hz feedback loop; larger values are useful for reproducible
+    // long experiments on slower machines while citizens keep learning each tick.
+    int advisorEvery = 1;
 };
 enum class Terrain { Water, Sand, Grass, Forest, Rock };
 enum class Structure { None, Home, Farm };

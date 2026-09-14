@@ -115,18 +115,25 @@ are identical whether it runs with one thread or many.
 ./build/pixel-society --headless --seed 42 --ticks 6000 --events events.jsonl
 ./build/pixel-society --headless --seed 42 --ticks 50 --realtime
 ./build/pixel-society --headless --seed 123 --founders 72 --threads 2
+./build/pixel-society --headless --seed 123 --advisor-every 5 --ticks 1200
 ./build/pixel-society --headless --seed 123 --shape archipelago --size large --ticks 1200
 ./build/pixel-society --seed 123 --founders 72 --fertility 0.8 --cooperation 0.9
 ./build/pixel-society --help
 ```
 
-Headless output is a JSON summary including the selected terrain shape and
-dimensions, population, births, deaths, construction, neural decisions,
-learning updates, the worker count and a reproducibility digest. The optional
-JSONL event log contains every recorded event, its tick, coordinates, category,
-text and score. The desktop keeps a
+Headless output is a JSON summary including the selected terrain shape,
+dimensions and advisor cadence, population, births, deaths, construction,
+neural decisions, learning updates, the worker count and a reproducibility
+digest. The optional JSONL event log contains every recorded event, its tick,
+coordinates, category, text and score. The desktop keeps a
 bounded recent journal in memory. An event's importance is separate from neural
 action values or learning rewards.
+
+The shared society core refreshes its advice every tick by default. Headless
+experiments can use `--advisor-every N` (1–300) to retain the most recent
+collective advice for N ticks between refreshes. This is useful when comparing
+long scenarios on smaller machines; it is part of the reproducibility contract,
+so a different cadence produces a different world trace.
 
 The same seed and settings reproduce the same trajectory within the same build,
 independent of the worker count. Floating-point math and random distributions

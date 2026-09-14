@@ -71,6 +71,7 @@ Usage: pixel-society [options]
   --hazards F          Environmental hazard intensity, 0..1 (default 0.35)
   --shape NAME         Terrain: island, archipelago, inland-sea, highlands, riverlands
   --size NAME          World: tiny 48x32, small 64x40, classic 96x64, large 128x80, huge 192x128
+  --advisor-every N    Refresh shared society advice every N ticks, 1..300 (default 1)
   --headless           Run without graphics for experiments
   --ticks N            Headless ticks (default 3000); each represents 0.2 seconds
   --threads N          Worker threads for the simulation pool (default: all cores)
@@ -107,6 +108,7 @@ int main(int argc, char** argv) {
             else if (option == "--hazards") config.hazards = fraction(next(), "--hazards");
             else if (option == "--shape") config.shape = shape(next());
             else if (option == "--size") config.worldSize = worldSize(next());
+            else if (option == "--advisor-every") config.advisorEvery = integer<int>(next(), "--advisor-every");
             else if (option == "--ticks") ticks = integer<std::uint64_t>(next(), "--ticks");
             else if (option == "--headless") headless = true;
             else if (option == "--threads") config.threads = integer<int>(next(), "--threads");
@@ -120,6 +122,8 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("--founders must be between 2 and 256");
         if (config.threads < 0 || config.threads > 256)
             throw std::invalid_argument("--threads must be between 0 and 256");
+        if (config.advisorEvery < 1 || config.advisorEvery > pixels::TicksPerDay)
+            throw std::invalid_argument("--advisor-every must be between 1 and 300");
         if (!headless && (realtime || !eventsPath.empty()))
             throw std::invalid_argument("--realtime and --events require --headless");
         if ((!smoke && !screenshot.empty()) || (headless && smoke))
@@ -167,6 +171,7 @@ int main(int argc, char** argv) {
         std::cout << "{\"seed\":" << config.seed << ",\"ticks\":" << simulation.tick()
                   << ",\"simulated_seconds\":" << static_cast<double>(simulation.tick()) / pixels::TicksPerSecond
                   << ",\"wall_seconds\":" << elapsed << ",\"threads\":" << pixels::parallel::workerCount()
+                  << ",\"advisor_every\":" << config.advisorEvery
                   << ",\"shape\":" << jsonString(pixels::nameOf(config.shape))
                   << ",\"size\":" << jsonString(pixels::nameOf(config.worldSize))
                   << ",\"width\":" << simulation.width() << ",\"height\":" << simulation.height()

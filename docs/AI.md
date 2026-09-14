@@ -54,12 +54,15 @@ an intention.
 ## Society advisory core
 
 `CoreAdviceCount` is 12, matching one signal per intention. `BrainInputCount`
-is 94 = the 82 observation bits plus 12 advisory channels. Each tick the
-simulation measures the mean observation vector of the living population, runs
-the society core on that average, clamps each raw output to `[-3.5, 3.5]` and
-rescales to `[0, 1]`, and appends the twelve signals below the citizen's own
-observation bits. `compose(observation, advice)` forms the full 94-wide brain
-input used for every choice, learning update and mutation check.
+is 94 = the 82 observation bits plus 12 advisory channels. By default, each
+tick the simulation measures the mean observation vector of the living
+population, runs the society core on that average, clamps each raw output to
+`[-3.5, 3.5]` and rescales to `[0, 1]`, and appends the twelve signals below the
+citizen's own observation bits. `compose(observation, advice)` forms the full
+94-wide brain input used for every choice, learning update and mutation check.
+For reproducible long headless experiments, `Config::advisorEvery` can hold the
+latest advisory vector for 1–300 ticks; the normal value is one and the cadence
+is included in the world digest.
 
 `makeSocietyCore(seed)` trains one core per civilization: every `Simulation`
 fits its own core from its world seed, so different seeds give different
