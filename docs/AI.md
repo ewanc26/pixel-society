@@ -75,6 +75,15 @@ around society-wide crowding, food security, construction and conflict
 pressure. The core is shared by all of a civilization's citizens and is
 read-only after training; citizens never train it.
 
+The two wide hidden layers dominate the forward pass cost and are split across
+a fixed-size worker pool set once per process (`Config::threads`, default all
+cores). Each output unit is an independent dot product over its own weight row,
+so the parallel forward pass is bit-for-bit identical to the serial one; the
+pool's chunk boundaries depend only on a constant row block size, never on the
+worker count. Mean observations in `currentAdvice()` are likewise gathered in
+parallel and folded in a fixed block order, which keeps the whole simulation
+trace reproducible for any number of threads.
+
 Founder brains are prepared with `makeFounderBrain(seed, core)`. The
 founder curriculum cycles the core over twelve similarly-programmed
 population-average scenarios so early networks learn to use the advisory

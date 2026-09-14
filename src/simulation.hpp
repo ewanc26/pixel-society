@@ -20,6 +20,9 @@ struct Config {
     float fertility = 0.65f;
     float cooperation = 0.7f;
     float hazards = 0.35f;
+    // Worker threads for the deterministic pool (0 = all available cores).
+    // The simulation's trace is independent of this value.
+    int threads = 0;
 };
 enum class Terrain { Water, Sand, Grass, Forest, Rock };
 enum class Structure { None, Home, Farm };

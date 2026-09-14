@@ -1,4 +1,5 @@
 #include "neural.hpp"
+#include "parallel.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -295,21 +296,34 @@ SocietyCore::SocietyCore(std::uint32_t seed) {
 SocietyCore::ForwardPass SocietyCore::forward(const CoreInput& society) const {
     ForwardPass pass;
     pass.input = normalized(society);
-    for (int h = 0; h < CoreHiddenOneCount; ++h) {
-        float sum = cb1_[h];
-        for (int i = 0; i < InputCount; ++i) sum += c1_[h][i] * pass.input[i];
-        pass.first[h] = std::tanh(sum);
-    }
-    for (int h = 0; h < CoreHiddenTwoCount; ++h) {
-        float sum = cb2_[h];
-        for (int i = 0; i < CoreHiddenOneCount; ++i) sum += c2_[h][i] * pass.first[i];
-        pass.second[h] = std::tanh(sum);
-    }
-    for (int h = 0; h < CoreHiddenThreeCount; ++h) {
-        float sum = cb3_[h];
-        for (int i = 0; i < CoreHiddenTwoCount; ++i) sum += c3_[h][i] * pass.second[i];
-        pass.third[h] = std::tanh(sum);
-    }
+    // The twelve-million-parameter core is by far the widest network in the
+    // simulation, so its hidden layers are worth splitting across the worker
+    // pool. Every output unit is an independent dot product that reads only
+    // the previous activations and its own weight row, so the row partition is
+    // bit-for-bit identical to running the loops serially. runRanges waits for
+    // each layer to finish before the next one starts.
+    constexpr std::size_t rowChunk = 256;
+    parallel::runRanges(static_cast<std::size_t>(CoreHiddenOneCount), rowChunk, [&](std::size_t begin, std::size_t end) {
+        for (int h = static_cast<int>(begin); h < static_cast<int>(end); ++h) {
+            float sum = cb1_[h];
+            for (int i = 0; i < InputCount; ++i) sum += c1_[h][i] * pass.input[i];
+            pass.first[h] = std::tanh(sum);
+        }
+    });
+    parallel::runRanges(static_cast<std::size_t>(CoreHiddenTwoCount), rowChunk, [&](std::size_t begin, std::size_t end) {
+        for (int h = static_cast<int>(begin); h < static_cast<int>(end); ++h) {
+            float sum = cb2_[h];
+            for (int i = 0; i < CoreHiddenOneCount; ++i) sum += c2_[h][i] * pass.first[i];
+            pass.second[h] = std::tanh(sum);
+        }
+    });
+    parallel::runRanges(static_cast<std::size_t>(CoreHiddenThreeCount), rowChunk, [&](std::size_t begin, std::size_t end) {
+        for (int h = static_cast<int>(begin); h < static_cast<int>(end); ++h) {
+            float sum = cb3_[h];
+            for (int i = 0; i < CoreHiddenTwoCount; ++i) sum += c3_[h][i] * pass.second[i];
+            pass.third[h] = std::tanh(sum);
+        }
+    });
     for (int a = 0; a < ActionCount; ++a) {
         float value = cb4_[a];
         for (int h = 0; h < CoreHiddenThreeCount; ++h) value += c4_[a][h] * pass.third[h];

@@ -88,25 +88,31 @@ learning controller, and does not claim human intelligence. Read the
 
 The headless runner uses the same C++ simulation without graphics. By default it
 runs fixed ticks as fast as possible; use `--realtime` for five ticks per wall-clock
-second. One simulated day is 300 ticks (60 seconds at normal pace).
+second. One simulated day is 300 ticks (60 seconds at normal pace). Heavy
+vectorized work — society-core inference, mean observations and route maps — runs
+on a fixed-size worker pool (`--threads N`, default: all cores). The pool's work
+partition does not depend on the thread count, so the simulation trace and digest
+are identical whether it runs with one thread or many.
 
 ```sh
 ./build/pixel-society --headless --seed 42 --ticks 6000 --events events.jsonl
 ./build/pixel-society --headless --seed 42 --ticks 50 --realtime
+./build/pixel-society --headless --seed 123 --founders 72 --threads 2
 ./build/pixel-society --seed 123 --founders 72 --fertility 0.8 --cooperation 0.9
 ./build/pixel-society --help
 ```
 
 Headless output is a JSON summary including population, births, deaths,
-construction, neural decisions, learning updates and a reproducibility digest.
-The optional JSONL event log contains every recorded event, its tick, coordinates,
-category, text and score. The desktop keeps a bounded recent journal in memory.
-An event's importance is separate from neural action values or learning rewards.
+construction, neural decisions, learning updates, the worker count and a
+reproducibility digest. The optional JSONL event log contains every recorded
+event, its tick, coordinates, category, text and score. The desktop keeps a
+bounded recent journal in memory. An event's importance is separate from neural
+action values or learning rewards.
 
-The same seed and settings reproduce the same trajectory within the same build.
-Floating-point math and random distributions can differ across platforms.
-Worlds are currently in-memory experiments; closing the application discards
-the world, and there is no save/load feature.
+The same seed and settings reproduce the same trajectory within the same build,
+independent of the worker count. Floating-point math and random distributions
+can differ across platforms. Worlds are currently in-memory experiments; closing
+the application discards the world, and there is no save/load feature.
 
 For machines without SDL:
 

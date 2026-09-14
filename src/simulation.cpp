@@ -1,4 +1,5 @@
 #include "simulation.hpp"
+#include "parallel.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -37,13 +38,18 @@ bool birthReady(const Citizen& citizen, const Config& config) {
 }
 }
 
-Simulation::Simulation(Config config) : core_(makeSocietyCore(config.seed)), config_(config), rng_(config.seed), tiles_(Area) {
+Simulation::Simulation(Config config) : config_(config), rng_(config.seed), tiles_(Area) {
     if (config.founders < 2 || config.founders > PopulationLimit ||
         !std::isfinite(config.fertility) || config.fertility < 0 || config.fertility > 1 ||
         !std::isfinite(config.cooperation) || config.cooperation < 0 || config.cooperation > 1 ||
         !std::isfinite(config.hazards) || config.hazards < 0 || config.hazards > 1) {
         throw std::invalid_argument("Founders must be 2..256 and fertility, cooperation, hazards must be finite values in [0,1]");
     }
+    // Configure the process-wide worker pool first so world generation and core
+    // training below already run with the requested level of parallelism. The
+    // simulation trace stays identical for any worker count.
+    pixels::parallel::setWorkerCount(config.threads);
+    core_ = makeSocietyCore(config.seed);
     citizens_.reserve(PopulationLimit);
     for (int kind = 0; kind < 5; ++kind) {
         destinations_[kind].resize(Area, -1);
@@ -147,48 +153,53 @@ void Simulation::generate() {
 }
 
 void Simulation::rebuildDestinations() {
-    for (int kind = 0; kind < 5; ++kind) {
-        auto& destinations = destinations_[kind];
-        auto& distances = distances_[kind];
-        std::fill(destinations.begin(), destinations.end(), -1);
-        std::fill(distances.begin(), distances.end(), Area);
-        std::array<int, Area> queue{};
-        int read = 0, write = 0;
-        for (int i = 0; i < Area; ++i) {
-            const Tile& ground = tiles_[i];
-            if (!walkable(i % WorldWidth, i / WorldWidth)) continue;
-            bool source = (kind == 0 && ground.food >= .2f) ||
-                          (kind == 2 && ground.wood >= .2f) ||
-                          (kind == 3 && ground.structure == Structure::Home) ||
-                          (kind == 4 && ground.structure == Structure::Farm);
-            int target = i;
-            if (kind == 1) {
-                for (const auto& direction : Directions) {
-                    const int nx = i % WorldWidth + direction[0], ny = i / WorldWidth + direction[1];
-                    if (inBounds(nx, ny) && tiles_[indexOf(nx, ny)].terrain == Terrain::Water) {
-                        target = indexOf(nx, ny); source = true; break;
+    // The five breadth-first fields are independent scans of the same tiles.
+    // Each worker plans its own kind's sources and walks its own queue, so the
+    // deterministic maps are unchanged no matter how the five chunks overlap.
+    parallel::runRanges(5, 1, [this](std::size_t begin, std::size_t end) {
+        for (std::size_t kind = begin; kind < end; ++kind) {
+            auto& destinations = destinations_[kind];
+            auto& distances = distances_[kind];
+            std::fill(destinations.begin(), destinations.end(), -1);
+            std::fill(distances.begin(), distances.end(), Area);
+            std::array<int, Area> queue{};
+            int read = 0, write = 0;
+            for (int i = 0; i < Area; ++i) {
+                const Tile& ground = tiles_[i];
+                if (!walkable(i % WorldWidth, i / WorldWidth)) continue;
+                bool source = (kind == 0 && ground.food >= .2f) ||
+                              (kind == 2 && ground.wood >= .2f) ||
+                              (kind == 3 && ground.structure == Structure::Home) ||
+                              (kind == 4 && ground.structure == Structure::Farm);
+                int target = i;
+                if (kind == 1) {
+                    for (const auto& direction : Directions) {
+                        const int nx = i % WorldWidth + direction[0], ny = i / WorldWidth + direction[1];
+                        if (inBounds(nx, ny) && tiles_[indexOf(nx, ny)].terrain == Terrain::Water) {
+                            target = indexOf(nx, ny); source = true; break;
+                        }
                     }
                 }
+                if (source) {
+                    distances[i] = kind == 1 ? 1 : 0;
+                    destinations[i] = target;
+                    queue[write++] = i;
+                }
             }
-            if (source) {
-                distances[i] = kind == 1 ? 1 : 0;
-                destinations[i] = target;
-                queue[write++] = i;
+            while (read < write) {
+                const int cell = queue[read++];
+                for (const auto& direction : Directions) {
+                    const int nx = cell % WorldWidth + direction[0], ny = cell / WorldWidth + direction[1];
+                    if (!walkable(nx, ny)) continue;
+                    const int next = indexOf(nx, ny);
+                    if (destinations[next] >= 0) continue;
+                    distances[next] = distances[cell] + 1;
+                    destinations[next] = destinations[cell];
+                    queue[write++] = next;
+                }
             }
         }
-        while (read < write) {
-            const int cell = queue[read++];
-            for (const auto& direction : Directions) {
-                const int nx = cell % WorldWidth + direction[0], ny = cell / WorldWidth + direction[1];
-                if (!walkable(nx, ny)) continue;
-                const int next = indexOf(nx, ny);
-                if (destinations[next] >= 0) continue;
-                distances[next] = distances[cell] + 1;
-                destinations[next] = destinations[cell];
-                queue[write++] = next;
-            }
-        }
-    }
+    });
 }
 
 int Simulation::nearest(int x, int y, int kind, int radius, int exclude) const {
@@ -410,14 +421,33 @@ Values Simulation::currentAdvice() const {
     // The society core reads the population's mean observation, so its advice
     // summarizes the whole settlement rather than any single resident. Every
     // citizen combines that shared advice with its own live observation.
+    // Resident observations only read tiles, citizens, statistics and the
+    // destination fields, so they parallelize safely: every block writes its
+    // own partial sum, then the mean folds those partials in fixed block order.
+    // The partition derives from a constant block size, not the worker count,
+    // so any number of threads reproduces the exact same mean and advice.
     CoreInput mean{};
     std::size_t living = 0;
-    for (std::size_t i = 0; i < citizens_.size(); ++i) {
-        const Citizen& resident = citizens_[i];
-        if (!resident.alive) continue;
-        const Observation view = observe(resident);
-        for (int k = 0; k < InputCount; ++k) mean[static_cast<std::size_t>(k)] += view[static_cast<std::size_t>(k)];
-        ++living;
+    const std::size_t residents = citizens_.size();
+    constexpr std::size_t BlockSize = 32;
+    const std::size_t blocks = (residents + BlockSize - 1) / BlockSize;
+    std::vector<CoreInput> partials(blocks);
+    std::vector<std::size_t> alive(blocks, 0);
+    parallel::runRanges(residents, BlockSize, [&](std::size_t begin, std::size_t end) {
+        const std::size_t block = begin / BlockSize;
+        CoreInput& partial = partials[block];
+        for (std::size_t i = begin; i < end; ++i) {
+            const Citizen& resident = citizens_[i];
+            if (!resident.alive) continue;
+            const Observation view = observe(resident);
+            for (int k = 0; k < InputCount; ++k) partial[static_cast<std::size_t>(k)] += view[static_cast<std::size_t>(k)];
+            ++alive[block];
+        }
+    });
+    for (std::size_t block = 0; block < blocks; ++block) {
+        if (alive[block] == 0) continue;
+        for (int k = 0; k < InputCount; ++k) mean[static_cast<std::size_t>(k)] += partials[block][static_cast<std::size_t>(k)];
+        living += alive[block];
     }
     if (living > 0) {
         const float inverse = 1.0f / static_cast<float>(living);

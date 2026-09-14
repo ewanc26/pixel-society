@@ -6,7 +6,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(PIXEL_SOCIETY_GUI "Build the SDL2 pixel observatory" ON)
 option(PIXEL_SOCIETY_SANITIZE "Enable address and undefined behavior sanitizers" OFF)
 
-add_library(society_core src/simulation.cpp src/neural.cpp)
+add_library(society_core src/simulation.cpp src/neural.cpp src/parallel.cpp)
 target_include_directories(society_core PUBLIC src)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(society_core PUBLIC -Wall -Wextra -Wpedantic)

@@ -1,5 +1,6 @@
 #include "simulation.hpp"
 #include "ticker.hpp"
+#include "parallel.hpp"
 #ifdef PIXEL_SOCIETY_GUI
 #include "ui.hpp"
 #endif
@@ -54,6 +55,7 @@ Usage: pixel-society [options]
   --hazards F          Environmental hazard intensity, 0..1 (default 0.35)
   --headless           Run without graphics for experiments
   --ticks N            Headless ticks (default 3000); each represents 0.2 seconds
+  --threads N          Worker threads for the simulation pool (default: all cores)
   --realtime           Pace headless mode at five ticks per second
   --events PATH        Write all headless events as scored JSONL
   --smoke-test         Exercise setup and observer UI automatically, then exit
@@ -87,6 +89,7 @@ int main(int argc, char** argv) {
             else if (option == "--hazards") config.hazards = fraction(next(), "--hazards");
             else if (option == "--ticks") ticks = integer<std::uint64_t>(next(), "--ticks");
             else if (option == "--headless") headless = true;
+            else if (option == "--threads") config.threads = integer<int>(next(), "--threads");
             else if (option == "--realtime") realtime = true;
             else if (option == "--events") eventsPath = next();
             else if (option == "--smoke-test") smoke = true;
@@ -95,6 +98,8 @@ int main(int argc, char** argv) {
         }
         if (config.founders < 2 || config.founders > pixels::PopulationLimit)
             throw std::invalid_argument("--founders must be between 2 and 256");
+        if (config.threads < 0 || config.threads > 256)
+            throw std::invalid_argument("--threads must be between 0 and 256");
         if (!headless && (realtime || !eventsPath.empty()))
             throw std::invalid_argument("--realtime and --events require --headless");
         if ((!smoke && !screenshot.empty()) || (headless && smoke))
@@ -141,7 +146,8 @@ int main(int argc, char** argv) {
         const auto& s = simulation.stats();
         std::cout << "{\"seed\":" << config.seed << ",\"ticks\":" << simulation.tick()
                   << ",\"simulated_seconds\":" << static_cast<double>(simulation.tick()) / pixels::TicksPerSecond
-                  << ",\"wall_seconds\":" << elapsed << ",\"population\":" << s.population
+                  << ",\"wall_seconds\":" << elapsed << ",\"threads\":" << pixels::parallel::workerCount()
+                  << ",\"population\":" << s.population
                   << ",\"births\":" << s.births << ",\"deaths\":" << s.deaths
                   << ",\"homes\":" << s.homes << ",\"farms\":" << s.farms
                   << ",\"generation\":" << s.generation << ",\"wellbeing\":" << s.wellbeing

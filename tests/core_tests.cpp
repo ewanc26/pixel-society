@@ -1,5 +1,6 @@
 #include "simulation.hpp"
 #include "ticker.hpp"
+#include "parallel.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -323,6 +324,19 @@ void extremes() {
     for (int i = 0; i < 100; ++i) crowded.step();
     invariants(crowded);
 }
+void threadDeterminism() {
+    Config config;
+    config.seed = 42;
+    config.threads = 1;
+    Simulation serial(config);
+    config.threads = 4;
+    Simulation parallel(config);
+    const int ticks = 250;
+    for (int i = 0; i < ticks; ++i) { serial.step(); parallel.step(); }
+    require(serial.digest() == parallel.digest(),
+            "digest is independent of the configured worker count");
+    parallel::setWorkerCount(0);
+}
 }
 int main() {
     try {
@@ -330,6 +344,7 @@ int main() {
         neural(); std::cout << "PASS deep neural inference, learning, masks, inheritance\n";
         observations(); std::cout << "PASS 82-feature individual and environmental observations\n";
         society(); std::cout << "PASS autonomous society, event ranks, determinism\n";
+        threadDeterminism(); std::cout << "PASS deterministic multithreaded simulation\n";
         extremes(); std::cout << "PASS invalid and extreme configurations\n";
         return 0;
     } catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
