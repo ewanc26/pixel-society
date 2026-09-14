@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <limits>
+#include <queue>
 #include <stdexcept>
 #include <utility>
 
@@ -57,6 +59,7 @@ Simulation::Simulation(Config config) : config_(config), rng_(config.seed), tile
     }
     generate();
     rebuildDestinations();
+    computeTerritory();
     refreshStatistics();
     history_.push_back({0, stats_.population, stats_.wellbeing});
 }
@@ -64,6 +67,11 @@ Simulation::Simulation(Config config) : config_(config), rng_(config.seed), tile
 const Tile& Simulation::tile(int x, int y) const {
     if (!inBounds(x, y)) throw std::out_of_range("Tile coordinates outside world");
     return tiles_[indexOf(x, y)];
+}
+
+int Simulation::territory(int x, int y) const {
+    if (!inBounds(x, y)) return -1;
+    return territory_[indexOf(x, y)];
 }
 
 bool Simulation::walkable(int x, int y) const {
@@ -200,6 +208,53 @@ void Simulation::rebuildDestinations() {
             }
         }
     });
+}
+
+void Simulation::computeTerritory() {
+    // Deterministic multi-source claim map: every land tile belongs to the
+    // civilisation whose nearest owned home, farm or resident wins the ground.
+    // Water and rock are never claimed. Ties go to the lower clan index, so
+    // the border lines the observer draws are stable for any given world.
+    territory_.assign(Area, -1);
+    constexpr float MaxDistance = std::numeric_limits<float>::max();
+    std::vector<float> reach(Area, MaxDistance);
+    using Entry = std::pair<float, int>;
+    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> frontier;
+    auto seed = [&](int tile, int clan, float cost) {
+        if (cost < reach[tile]) {
+            reach[tile] = cost;
+            territory_[tile] = clan;
+            frontier.push({cost, tile});
+        }
+    };
+    for (int i = 0; i < Area; ++i) {
+        const Tile& ground = tiles_[i];
+        if (ground.structure != Structure::None && ground.owner >= 0)
+            seed(i, ground.owner, 0.0f);
+    }
+    for (const Citizen& citizen : citizens_)
+        if (citizen.alive) seed(indexOf(citizen.x, citizen.y), citizen.clan, 4.0f);
+    while (!frontier.empty()) {
+        const Entry current = frontier.top(); frontier.pop();
+        const float cost = current.first;
+        const int tile = current.second;
+        if (cost > reach[tile]) continue;
+        const int x = tile % WorldWidth, y = tile / WorldWidth;
+        for (const auto& direction : Directions) {
+            const int nx = x + direction[0], ny = y + direction[1];
+            if (!inBounds(nx, ny)) continue;
+            const int next = indexOf(nx, ny);
+            const Tile& ground = tiles_[next];
+            if (ground.terrain == Terrain::Water || ground.terrain == Terrain::Rock) continue;
+            const float through = cost + 1.0f;
+            if (through < reach[next] ||
+                (through == reach[next] && territory_[tile] < territory_[next])) {
+                reach[next] = through;
+                territory_[next] = territory_[tile];
+                frontier.push({through, next});
+            }
+        }
+    }
 }
 
 int Simulation::nearest(int x, int y, int kind, int radius, int exclude) const {
@@ -813,6 +868,7 @@ void Simulation::environment() {
     // fixed five-ticks-per-second rate instead of spending each tick rebuilding
     // the entire map for every citizen's changing inventory.
     if (tick_ % TicksPerSecond == 0) rebuildDestinations();
+    if (tick_ % TicksPerSecond == 0) computeTerritory();
 }
 
 void Simulation::epidemiology() {
@@ -952,6 +1008,7 @@ std::uint64_t Simulation::digest() const {
         add(ground.terrain); add(ground.structure); add(ground.food); add(ground.wood); add(ground.fertility);
         add(ground.fire); add(ground.traffic); add(ground.owner); add(ground.burned);
     }
+    for (int label : territory_) add(label);
     add(citizens_.size());
     for (const Citizen& citizen : citizens_) {
         add(citizen.id); add(citizen.x); add(citizen.y); add(citizen.clan); add(citizen.generation);

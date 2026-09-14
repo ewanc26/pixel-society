@@ -85,6 +85,11 @@ public:
     const std::deque<HistoryPoint>& history() const { return history_; }
     const Statistics& stats() const { return stats_; }
     const Tile& tile(int x, int y) const;
+    // Deterministic clan territory labels (one per tile): the civilisation that
+    // claims a tile, or -1 where no civilisation has claimed the land yet.
+    // Drives the observer's border overlay and is covered by the digest.
+    int territory(int x, int y) const;
+    const std::vector<int>& territory() const { return territory_; }
     Observation observe(const Citizen& citizen) const;
     ActionMask legalActions(const Citizen& citizen) const;
     std::string seasonName() const;
@@ -115,7 +120,10 @@ private:
     std::array<std::vector<int>, 5> destinations_;
     std::array<std::vector<int>, 5> distances_;
     std::vector<int> landComponents_;
+    // Per-tile clan territory labels used by the observer's border overlay.
+    std::vector<int> territory_;
     void rebuildDestinations();
+    void computeTerritory();
     void generate();
     void environment();
     void epidemiology();

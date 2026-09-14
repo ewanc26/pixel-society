@@ -209,6 +209,20 @@ while the donor's own weights are never touched. Like mutation and inheritance
 this is a pure weight-space operation: it changes learned tendencies, not the
 observation or action contract.
 
+### Civilisation territory
+
+A deterministically computed claim map labels every land tile with the clan
+that claims it. Territory fans out from each clan's owned homes and farms
+(cost 0 seeds) and its living citizens (cost 4 seeds); water and rock stay
+unclaimed, movement costs one per step, and equal-cost ties resolve to the
+lower clan index. Recomputing on the same one-second schedule as the route
+maps — serially, on the main thread — keeps the map reproducible for any seed
+and worker count. It is used only by the observer's `BORDERS` layer (a claim
+tint plus bright frontiers between differently claimed or unclaimed regions)
+and folded into the world digest; it adds no observation slots and never
+reaches the citizen networks, so territory is an analytic overlay, not a
+policy input.
+
 ## Event importance is separate
 
 Every recorded world event has an integer importance score from **0 to 100**.

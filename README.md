@@ -66,6 +66,10 @@ only changes what you see. Close the window to finish the experiment.
 - Social contact doubles as **cultural transmission**: the less experienced
   citizen blends its policy toward the more seasoned one, so elders and
   veterans pass learned behaviour onward between generations.
+- Every second the world marks each land tile with the **civilisation territory**
+  that claims it: the clan whose nearest owned home, farm or resident wins the
+  ground. The claim map reproduces exactly for a given seed and thread count,
+  and the observer can sketch the resulting frontiers.
 - The observer shows live population, wellbeing, neural action values, sensor
   group summaries and data quality, history, and scored events. The population
   is bounded at 256 for predictable performance.
@@ -123,6 +127,12 @@ independent of the worker count. Floating-point math and random distributions
 can differ across platforms. Worlds are currently in-memory experiments; closing
 the application discards the world, and there is no save/load feature.
 
+The desktop's **BORDERS** observation layer tints every claimed tile with its
+owning civilisation's colour and draws a bright frontier between regions claimed
+differently (or not yet claimed). Territory is derived only for display and the
+reproducibility digest; citizens never see it, so observing the map does not
+change the experiment.
+
 For machines without SDL:
 
 ```sh
@@ -148,7 +158,8 @@ change, a high-index sensor that changes learned action values, deeper neural
 learning and decision changes, legal action masking, inheritance and cultural
 imitation, five-tick timing with retained frame debt, seeded determinism,
 autonomous construction and births, the emergent disease, fire-succession and
-transmission mechanics, resource and population invariants, event scores, and
+transmission mechanics, deterministic civilisation territory and its visible
+borders, resource and population invariants, event scores, and
 extreme starting conditions. The society-core constructor is asserted to be over ten
 million parameters, its training is deterministic across identical seeds, and
 a dedicated check proves per-citizen policies react to the advisory channels.

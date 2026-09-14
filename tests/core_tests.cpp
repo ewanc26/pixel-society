@@ -412,6 +412,44 @@ void mechanics() {
     for (const Event& event : serene.events()) if (event.kind == "fire" || event.kind == "destruction") ++serenefires;
     require(serenefires == 0, "without hazard pressure, lightning must never ignite the forest");
 }
+bool territoryBoundary(const Simulation& sim) {
+    const auto& tiles = sim.tiles();
+    for (int y = 0; y < WorldHeight; ++y) {
+        for (int x = 0; x < WorldWidth; ++x) {
+            const int here = sim.territory(x, y);
+            const int cell = y * WorldWidth + x;
+            if (x + 1 < WorldWidth &&
+                tiles[static_cast<std::size_t>(cell)].terrain != Terrain::Water &&
+                tiles[static_cast<std::size_t>(cell + 1)].terrain != Terrain::Water &&
+                here != sim.territory(x + 1, y)) return true;
+            if (y + 1 < WorldHeight &&
+                tiles[static_cast<std::size_t>(cell)].terrain != Terrain::Rock &&
+                tiles[static_cast<std::size_t>(cell + WorldWidth)].terrain != Terrain::Rock &&
+                here != sim.territory(x, y + 1)) return true;
+        }
+    }
+    return false;
+}
+void borders() {
+    Config config;
+    config.seed = 42;
+    Simulation a(config), b(config);
+    require(a.territory().size() == static_cast<std::size_t>(WorldWidth * WorldHeight),
+            "territory labels must cover every tile");
+    require(a.territory() == b.territory(), "territory must derive deterministically from the seed");
+    std::set<int> clans;
+    for (int label : a.territory()) if (label >= 0) clans.insert(label);
+    require(clans.size() >= 2, "distinct civilisations must claim distinct land immediately");
+    require(territoryBoundary(a), "claimed land must meet at a visible border from the start");
+    for (int i = 0; i < HarshRunTicks; ++i) {
+        a.step();
+        if (i % 500 == 0) require(territoryBoundary(a), "borders must persist as the world develops");
+    }
+    require(territoryBoundary(a), "borders must survive sustained settlement");
+    int claimed = 0;
+    for (int label : a.territory()) if (label >= 0) ++claimed;
+    std::cout << "seed42 borders: clans=" << clans.size() << " claimed=" << claimed << '\n';
+}
 void threadDeterminism() {
     Config config;
     config.seed = 42;
@@ -433,6 +471,7 @@ int main() {
         culture(); std::cout << "PASS social imitation and cultural transmission\n";
         observations(); std::cout << "PASS 82-feature individual and environmental observations\n";
         society(); std::cout << "PASS autonomous society, event ranks, determinism\n";
+        borders(); std::cout << "PASS deterministic civilisation territory borders\n";
         mechanics(); std::cout << "PASS disease, fire succession and cultural mechanics\n";
         threadDeterminism(); std::cout << "PASS deterministic multithreaded simulation\n";
         extremes(); std::cout << "PASS invalid and extreme configurations\n";

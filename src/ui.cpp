@@ -223,6 +223,8 @@ void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
             }
             if (view.layer == 1 && tile.terrain != Terrain::Water)
                 out.rect(px+1,py+1,3,3,blend(0xff6e503e,Teal,std::clamp(tile.fertility,0.0f,1.0f)));
+            if (view.layer == 3 && sim.territory(x,y) >= 0)
+                out.rect(px,py,Cell,Cell,blend(base,clanColor(sim.territory(x,y)),0.30f));
             if (tile.structure == Structure::Home) {
                 out.rect(px+1,py+2,3,3,0xffead6a3);
                 out.rect(px,py+1,5,1,0xffab6552); out.rect(px+1,py,3,1,Red);
@@ -254,6 +256,28 @@ void drawWorld(Canvas& out, const Simulation& sim, const View& view) {
             out.rect(xx,y-2,1,9,Cream);
             out.rect(side < 0 ? xx : xx-1,y-2,2,1,Cream);
             out.rect(side < 0 ? xx : xx-1,y+6,2,1,Cream);
+        }
+    }
+    if (view.layer == 3) {
+        // Civilisation borders: a bright line wherever neighbouring land is
+        // claimed differently (or not at all), except across water and rock.
+        constexpr Color Frontier = 0xfff6f2dc;
+        const auto& tiles = sim.tiles();
+        for (int y = 0; y < WorldHeight; ++y) {
+            for (int x = 0; x < WorldWidth; ++x) {
+                const int cell = y*WorldWidth+x;
+                const int here = sim.territory(x,y);
+                if (x+1 < WorldWidth &&
+                    tiles[static_cast<std::size_t>(cell)].terrain != Terrain::Water &&
+                    tiles[static_cast<std::size_t>(cell+1)].terrain != Terrain::Water &&
+                    here != sim.territory(x+1,y))
+                    out.rect(MapX+(x+1)*Cell-1,MapY+y*Cell,1,Cell,Frontier);
+                if (y+1 < WorldHeight &&
+                    tiles[static_cast<std::size_t>(cell)].terrain != Terrain::Rock &&
+                    tiles[static_cast<std::size_t>(cell+WorldWidth)].terrain != Terrain::Rock &&
+                    here != sim.territory(x,y+1))
+                    out.rect(MapX+x*Cell,MapY+(y+1)*Cell-1,Cell,1,Frontier);
+            }
         }
     }
     out.frame(MapX-1,MapY-1,WorldWidth*Cell+2,WorldHeight*Cell+2,Edge);
@@ -411,14 +435,14 @@ void drawObservation(Canvas& out, const Simulation& sim, const View& view, bool 
     metric(out,212,"HOMES",std::to_string(sim.stats().homes));
     metric(out,310,"FARMS",std::to_string(sim.stats().farms));
     metric(out,408,"GENERATION",std::to_string(sim.stats().generation));
-    constexpr std::array<const char*,3> labels{"1 LANDSCAPE","2 RESOURCES","3 CLANS"};
-    for (int i = 0; i < 3; ++i) {
+    constexpr std::array<const char*,4> labels{"1 LANDSCAPE","2 RESOURCES","3 CLANS","4 BORDERS"};
+    for (int i = 0; i < 4; ++i) {
         if (view.layer == i) out.rect(16+i*104,99,98,14,Edge);
         out.text(22+i*104,102,labels[i],view.layer == i ? Cream : Muted);
     }
-    out.text(354,103,"TAB: NEXT / H: GUIDE",Muted);
+    out.text(446,103,"TAB: NEXT / H: GUIDE",Muted);
     drawWorld(out,sim,view); drawInspector(out,sim,view); drawEvents(out,sim); drawHistory(out,sim);
-    out.text(16,441,view.layer == 1 ? "SOIL: BROWN > TEAL    CITIZENS: TEAL > RED = NEED" : "CLICK TO FOLLOW / EACH PIXEL CITIZEN HAS ITS OWN LEARNING BRAIN",Muted);
+    out.text(16,441,view.layer == 1 ? "SOIL: BROWN > TEAL    CITIZENS: TEAL > RED = NEED" : view.layer == 3 ? "TINT: CLAIMED LAND    LINES: CIVILISATION BORDERS" : "CLICK TO FOLLOW / EACH PIXEL CITIZEN HAS ITS OWN LEARNING BRAIN",Muted);
     out.text(16,501,"SEED "+std::to_string(sim.config().seed)+" / AUTONOMOUS AFTER START",Muted);
     out.text(584,501,"H GUIDE / ESC QUIT",Muted);
 }
@@ -475,10 +499,10 @@ void drawHelp(Canvas& out) {
     out.wrap(158,145,"THE WORLD ADVANCES FIVE TIMES EACH SECOND. EVERY CITIZEN READS 82 LIVE SENSORS PLUS 12 ADVISORY SIGNALS FROM ITS CIVILIZATION'S 12-MILLION-PARAMETER SOCIETY CORE, CHOOSES AN ACTION WITH ITS PERSONAL TWO-HIDDEN-LAYER NETWORK, AND LEARNS FROM THE RESULT.",73,3);
     out.text(158,189,"CLICK MAP",Gold); out.text(284,189,"FOLLOW THE NEAREST LIVING CITIZEN");
     out.text(158,207,"TAB",Gold); out.text(284,207,"FOLLOW THE NEXT LIVING CITIZEN");
-    out.text(158,225,"1 / 2 / 3",Gold); out.text(284,225,"LANDSCAPE / RESOURCES / CLANS");
+    out.text(158,225,"1 / 2 / 3 / 4",Gold); out.text(284,225,"LANDSCAPE / RESOURCES / CLANS / BORDERS");
     out.text(158,243,"H / ESC",Gold); out.text(284,243,"CLOSE GUIDE / ESC AGAIN TO QUIT");
     out.wrap(158,271,"THE INSPECTOR GROUPS SELF, WORLD, LOCAL, NEARBY AND SOCIAL SENSORS. Q VALUES ESTIMATE FUTURE REWARD; THEY ARE NOT PROBABILITIES.",73,3);
-    out.wrap(158,316,"EVENT SCORES ALWAYS RUN FROM 0 TO 100: HIGHER MEANS GREATER IMPACT. THE CHRONICLE SHOWS THE LATEST EVENTS. THE RESOURCE LAYER SHOWS SOIL FERTILITY AND CITIZEN NEED.",73,3);
+    out.wrap(158,316,"EVENT SCORES ALWAYS RUN FROM 0 TO 100: HIGHER MEANS GREATER IMPACT. THE CHRONICLE SHOWS THE LATEST EVENTS. THE RESOURCE LAYER SHOWS SOIL FERTILITY AND CITIZEN NEED. THE BORDERS LAYER TINTS LAND CLAIMED BY EACH CIVILISATION AND LINES ITS FRONTIERS.",73,3);
     out.text(158,365,"THE SIMULATION CONTINUES WHILE THIS GUIDE IS OPEN.",Teal);
     out.text(158,391,"H TO RETURN TO YOUR WORLD",Cream);
 }
@@ -574,7 +598,7 @@ int runUi(const UiOptions& options) {
                     if (key == SDLK_RIGHT) adjust(draft,selectedField,1);
                     if (key == SDLK_RETURN || key == SDLK_KP_ENTER) begin();
                 } else {
-                    if (key >= SDLK_1 && key <= SDLK_3) view.layer = static_cast<int>(key-SDLK_1);
+                    if (key >= SDLK_1 && key <= SDLK_4) view.layer = static_cast<int>(key-SDLK_1);
                     if (key == SDLK_TAB) nextCitizen(*sim,view);
                     if (key == SDLK_h || key == SDLK_F1) view.help = !view.help;
                 }
@@ -595,7 +619,7 @@ int runUi(const UiOptions& options) {
                 } else if (!view.help) {
                     if (inside(x,y,MapX,MapY,WorldWidth*Cell,WorldHeight*Cell))
                         selectAt(*sim,view,(x-MapX)/Cell,(y-MapY)/Cell);
-                    for (int i = 0; i < 3; ++i)
+                    for (int i = 0; i < 4; ++i)
                         if (inside(x,y,16+i*104,99,98,14)) view.layer = i;
                 }
             }
@@ -625,12 +649,15 @@ int runUi(const UiOptions& options) {
             } else if (smokePhase == 3 && elapsed >= std::chrono::milliseconds(900)) {
                 smokeLayers = smokeLayers && view.layer == 2;
                 smokeGuide = view.help;
+                pushKey(SDLK_4); smokePhase = 4;
+            } else if (smokePhase == 4 && elapsed >= std::chrono::milliseconds(1200)) {
+                smokeLayers = smokeLayers && view.layer == 3;
                 pushKey(SDLK_h); pushKey(SDLK_1);
                 // Former setup keys, including ENTER, must have no effect on a live world.
                 pushKey(SDLK_DOWN); pushKey(SDLK_RIGHT); pushKey(SDLK_RETURN);
                 pushKey(SDLK_UP); pushKey(SDLK_LEFT); pushKey(SDLK_SPACE);
-                smokePhase = 4;
-            } else if (smokePhase == 4 && elapsed >= std::chrono::milliseconds(2200)) {
+                smokePhase = 5;
+            } else if (smokePhase == 5 && elapsed >= std::chrono::milliseconds(2200)) {
                 running = false;
             }
         }

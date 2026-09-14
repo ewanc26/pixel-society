@@ -66,7 +66,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 
-5 / 5 tests passed in 61.38 seconds
+5 / 5 tests passed in 66.11 seconds
 ```
 
 Those tests cover neural inference and backpropagation, the ten-million-plus
@@ -74,8 +74,9 @@ parameter per-civilization society core and its deterministic training,
 advice-channel sensitivity, action masking, mutation/inheritance and social
 imitation, the fixed 200 ms clock and catch-up debt, seeded determinism,
 worker-count invariance, the emergent disease/fire/transmission mechanics,
-autonomous construction and reproduction, score bounds, world invariants,
-invalid input and the SDL observer flow.
+deterministic civilisation territory and its visible borders, autonomous
+construction and reproduction, score bounds, world invariants, invalid input
+and the SDL observer flow.
 
 The instrumented core build also completed:
 
@@ -85,7 +86,7 @@ cmake -S . -B build-sanitize -DPIXEL_SOCIETY_GUI=OFF \
 cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 
-4 / 4 tests passed in 93.59 seconds
+4 / 4 tests passed in 95.83 seconds
 ```
 
 The sanitizer configuration keeps the same test categories but uses a shorter
@@ -104,7 +105,7 @@ observer:
 ```
 
 It represents 1,200 simulated seconds (20 game days). On the release build it
-finished on this machine in 22.69 seconds wall-clock with ten worker threads,
+finished on this machine in 23.26 seconds wall-clock with ten worker threads,
 256 citizens, 306 births, 98 deaths, generation 5, 92.39% wellbeing, 1,353,682
 neural decisions and 1,353,688 learning updates, and a civilization seed-42
 society core of 12,002,316 parameters. Every one of the twelve intentions had a
@@ -115,12 +116,15 @@ volume above the earlier snapshot while the society keeps reproducing under
 the added disease pressure.
 
 Two independent runs with those same settings produced the same deterministic
-world digest: `13830909894271019662`. The digest is independent of the worker
+world digest: `2171052458119317984`. The digest is independent of the worker
 pool as well as of wall-clock time: the same world run with one, ten or 256
-threads reported the identical digest. Because each civilization trains its own
-core from its world seed, this snapshot's digest and population statistics
-differ from the earlier shared-core release: the seed-42 civilization's core
-and the world it spawns are part of a single deterministic seed contract.
+threads reported the identical digest. The territory labels now contribute to
+the digest (and therefore shift it from the mechanics-only snapshot), while
+the population statistics remain unchanged because the claim map is derived
+for display only. Because each civilization trains its own core from its world
+seed, this snapshot's digest and population statistics differ from the earlier
+shared-core release: the seed-42 civilization's core and the world it spawns
+are part of a single deterministic seed contract.
 
 ## Native observer check
 
