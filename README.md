@@ -50,9 +50,10 @@ only changes what you see. Close the window to finish the experiment.
   build, farm, share, socialize, reproduce and attack.
 - Citizens navigate the land and consume actual shared world resources. Homes
   and farms arise from their own work and timber inventories.
-- A shared society core observes the population average every tick and advises
-  every citizen, so personal policies coordinate around society-wide crowding,
-  food security, construction and conflict pressure.
+- Every civilization's own trained society core observes the population average
+  every tick and advises its citizens, so personal policies coordinate around
+  society-wide crowding, food security, construction and conflict pressure.
+  Different civilization seeds train different cores.
 - Cooperation, competition, inherited traits and learned policies influence
   how the population develops. Children inherit a mutated parental network.
 - Seasonal production and environmental hazards change conditions over time.
@@ -67,16 +68,17 @@ growth, conflict and extinction are outcomes to observe.
 
 ## What the AI actually does
 
-A shared **society core** with **12,002,316 parameters** is trained once per
-build (the founder instinct) and shared by every simulated world. Each tick it
-reads the live population-average observation and returns twelve advisory
-signals. Each citizen appends those signals to its own 82 live observations
-(its body and supplies, local terrain and resources, reachable world features,
-nearby social conditions, and longer-running world context), and its personal
-**94 → 56 → 28 → 12** network learns with online backpropagation. Every
-intention comes from neural action values or exploratory sampling of physically
-legal actions. The simulation executes movement and interactions and returns a
-reward; the citizen updates its own network.
+Every civilization trains its own **society core** (82 → 2048 → 2560 → 2560 →
+12, **12,002,316 parameters**) from its world seed, so different seeds produce
+genuinely different collective instincts. Each tick it reads the live
+population-average observation and returns twelve advisory signals. Each citizen
+appends those signals to its own 82 live observations (its body and supplies,
+local terrain and resources, reachable world features, nearby social conditions,
+and longer-running world context), and its personal **94 → 56 → 28 → 12**
+network learns with online backpropagation. Every intention comes from neural
+action values or exploratory sampling of physically legal actions. The
+simulation executes movement and interactions and returns a reward; the citizen
+updates its own network.
 
 The starting curriculum is an authored prior. The model is a small reinforcement
 learning controller, and does not claim human intelligence. Read the

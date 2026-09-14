@@ -1,16 +1,16 @@
 # Citizen neural AI
 
-Every simulation ships a shared **society core**: a C++ feedforward network with
-**82 inputs → 2048 tanh units → 2560 tanh units → 2560 tanh units → 12 linear
-outputs**, trained once with a deterministic synthetic curriculum and memoized
-per process. It has **12,002,316 trainable scalar parameters**, including
-biases. Once per tick it reads the live population-average observation vector
-and returns normalized advisory signals for the twelve intentions.
+Every civilization owns a trainable **society core**: a C++ feedforward network
+with **82 inputs → 2048 tanh units → 2560 tanh units → 2560 tanh units → 12
+linear outputs**, fitted from that civilization's world seed with a deterministic
+synthetic curriculum. It has **12,002,316 trainable scalar parameters**,
+including biases. Once per tick it reads the live population-average observation
+vector and returns normalized advisory signals for the twelve intentions.
 
 Each living citizen owns a smaller trainable personal network:
 **94 inputs → 56 tanh units → 28 tanh units → 12 linear Q values**,
 **7,264 parameters**. The 94 inputs are the citizen's own 82 live observations
-plus the 12 advisory channels from the shared core. The personal network
+plus the 12 advisory channels from its civilization's core. The personal network
 evaluates one set of action values every game tick and learns from the
 consequences of its own selected action.
 
@@ -61,15 +61,19 @@ rescales to `[0, 1]`, and appends the twelve signals below the citizen's own
 observation bits. `compose(observation, advice)` forms the full 94-wide brain
 input used for every choice, learning update and mutation check.
 
-`makeSocietyCore()` is memoized: the core is trained exactly once per process
-with a fixed seed regardless of how many simulations are constructed, so every
-world in the process shares identical instincts. Training uses Xavier
-initialization and a multi-output curriculum of 64 epochs over two passes of a
-tribe-mean sample set at learning rates 0.05 and 0.025, fitting all 12 outputs
-together. Because the core observes the flattened population average, its
-signals let scattered personal policies coordinate around society-wide crowding,
-food security, construction and conflict pressure. The core is shared read-only;
-citizens never train it.
+`makeSocietyCore(seed)` trains one core per civilization: every `Simulation`
+fits its own core from its world seed, so different seeds give different
+civilizations distinct collective instincts while the same seed always
+reproduces the identical core. The trained core is cached per seed, so a
+restarted experiment or the observer's reference copy reuses the exact same
+core, and the cache has a bounded size to keep a long-lived process stable.
+Training uses Xavier initialization and a multi-output curriculum of 64 epochs
+over two passes of a tribe-mean sample set at learning rates 0.05 and 0.025,
+fitting all 12 outputs together. Because the core observes the flattened
+population average, its signals let scattered personal policies coordinate
+around society-wide crowding, food security, construction and conflict
+pressure. The core is shared by all of a civilization's citizens and is
+read-only after training; citizens never train it.
 
 Founder brains are prepared with `makeFounderBrain(seed, core)`. The
 founder curriculum cycles the core over twelve similarly-programmed
@@ -99,7 +103,7 @@ of travel, for example, and the brain is evaluated again on every tick.
 
 `makeFounderBrain(seed, core)` uses Xavier initialization and a compact
 deterministic synthetic curriculum over the founder's own sparse observation
-space, keyed to the shared core's advisory channels. It creates 3,072 stratified
+space, keyed to its civilization core's advisory channels. It creates 3,072 stratified
 observations (two passes of 1,536): ordinary life, scarcity, emergencies,
 construction opportunities, farming, sharing, social contact, reproduction and
 conflict. The examples use the full 82-bit observation layout plus the core's

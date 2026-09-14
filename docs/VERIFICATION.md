@@ -27,9 +27,12 @@ the resulting values to separate. This catches a disconnected final feature or
 a shallow implementation that silently ignores the high-index observation
 data. A companion advisory-channel check trains identical personal networks
 against a core advice of 0.05 versus 0.95 on the farm intention and requires
-the learned action values to separate, proving that the shared core's signals
-really change per-citizen policy. The society core itself asserts deterministic
-training across identical seeds and divergent behaviour across different seeds.
+the learned action values to separate, proving that a civilization core's
+advisory signals really change per-citizen policy. The society core itself
+asserts deterministic training across identical seeds and divergent cores (and
+therefore divergent advice) across different civilization seeds. Simulations
+with the same world seed reproduce exactly, and simulations seeded differently
+diverge at tick zero.
 The ordinary learning, action-mask, mutation, temporal-difference and long-world
 checks still run alongside these.
 
@@ -63,14 +66,15 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 
-5 / 5 tests passed in 83.95 seconds
+5 / 5 tests passed in 112.45 seconds
 ```
 
 Those tests cover neural inference and backpropagation, the ten-million-plus
-parameter society core and its deterministic training, advice-channel
-sensitivity, action masking, mutation/inheritance, the fixed 200 ms clock and
-catch-up debt, seeded determinism, autonomous construction and reproduction,
-score bounds, world invariants, invalid input and the SDL observer flow.
+parameter per-civilization society core and its deterministic training,
+advice-channel sensitivity, action masking, mutation/inheritance, the fixed
+200 ms clock and catch-up debt, seeded determinism, autonomous construction and
+reproduction, score bounds, world invariants, invalid input and the SDL observer
+flow.
 
 The instrumented core build also completed:
 
@@ -80,7 +84,7 @@ cmake -S . -B build-sanitize -DPIXEL_SOCIETY_GUI=OFF \
 cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 
-4 / 4 tests passed in 67.06 seconds
+4 / 4 tests passed in 97.78 seconds
 ```
 
 The sanitizer configuration keeps the same test categories but uses a shorter
@@ -98,17 +102,21 @@ observer:
 ```
 
 It represents 1,200 simulated seconds (20 game days). On the release build it
-finished with 256 citizens, 245 births, 37 deaths, generation 5, 94.19%
-wellbeing, 1,357,115 neural decisions and 1,357,117 learning updates, and a
-shared society core of 12,002,316 parameters. Every one of the twelve
-intentions had a nonzero action count. The JSONL log contained 98,955 scored
-events; a range check found zero scores outside 0–100. Sharing and conflict
-dominate the chronicle here as the advice-informed policies cooperate and
-compete more actively than the original release.
+finished with 256 citizens, 272 births, 64 deaths, generation 4, 94.74%
+wellbeing, 1,355,831 neural decisions and 1,355,835 learning updates, and a
+civilization seed-42 society core of 12,002,316 parameters. Every one of the
+twelve intentions had a nonzero action count. The JSONL log contained 82,816
+scored events; a range check found zero scores outside 0–100. Sharing and
+conflict dominate the chronicle here as the advice-informed policies cooperate
+and compete more actively than the original release.
 
 Two independent runs with those same settings produced the same deterministic
-world digest: `10321713796275195855`. Wall-clock duration is intentionally not
-part of the digest or reproducibility claim.
+world digest: `12328926939605385823`. Because each civilization now trains its
+own core from its world seed, this snapshot's digest and population statistics
+differ from the earlier shared-core release: the seed-42 civilization's core
+and the world it spawns are part of a single deterministic seed contract. Wall-
+clock duration is intentionally not part of the digest or reproducibility
+claim.
 
 ## Native observer check
 
