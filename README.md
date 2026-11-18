@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://github.com/ewanc26/pixel-society/actions/workflows/ci.yml"><img src="https://github.com/ewanc26/pixel-society/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/ewanc26/pixel-society?label=licence" alt="Licence"></a>
+  <a href="https://github.com/sponsors/ewanc26"><img src="https://img.shields.io/github/sponsors/ewanc26?logo=githubsponsors&logoColor=white&label=sponsors" alt="Sponsor"></a>
+</p>
+
 # Pixel Society
 
 **Set the starting conditions. Let the pixels decide what happens next.**
@@ -41,7 +47,8 @@ SDL2 2.0.18+. Windows has not been verified.
 
 Choose the initial conditions on the setup screen and begin. After that,
 citizens decide what to do; there are no building tools, orders, speed controls,
-or resource injections. Selecting a citizen and changing an observation layer
+or resource injections. Sele
+cting a citizen and changing an observation layer
 only changes what you see. Press **M** or **Esc** for the observer menu: resume,
 return to world setup, open the guide or quit. The menu pauses the simulation
 and does not alter its rules or state.
@@ -72,7 +79,8 @@ and does not alter its rules or state.
   season after season.
 - Crowded, unhappy settlements can kindle density-driven **plagues**. Disease
   spreads between adjacent citizens, housed citizens self-quarantine and spread
-  it far less, survivors gain temporary immunity, and immunity slowly wanes.
+  it far
+ less, survivors gain temporary immunity, and immunity slowly wanes.
 - Social contact doubles as **cultural transmission**: the less experienced
   citizen blends its policy toward the more seasoned one, so elders and
   veterans pass learned behaviour onward between generations.
@@ -104,7 +112,8 @@ action values or exploratory sampling of physically legal actions. The
 simulation executes movement and interactions and returns a reward; the citizen
 updates its own network.
 
-The starting curriculum is an authored prior. The model is a small reinforcement
+The starting curriculum is an authored prior. The model is a small re
+inforcement
 learning controller, and does not claim human intelligence. Read the
 [AI design](docs/AI.md) for the inputs, training targets, learning rule and limits.
 
@@ -140,7 +149,8 @@ action values or learning rewards.
 The shared society core refreshes its advice every tick by default. Headless
 experiments can use `--advisor-every N` (1–300) to retain the most recent
 collective advice for N ticks between refreshes. This is useful when comparing
-long scenarios on smaller machines; it is part of the reproducibility contract,
+long scenari
+os on smaller machines; it is part of the reproducibility contract,
 so a different cadence produces a different world trace.
 
 The same seed and settings reproduce the same trajectory within the same build,
@@ -182,7 +192,8 @@ determinism, autonomous construction, births and shared storehouses, all five
 terrain shapes and world-size presets, the emergent disease, fire-succession and
 transmission mechanics, deterministic civilisation territory and its visible
 borders, resource and population invariants, event scores, and extreme starting
-conditions. The society-core constructor is asserted to be over ten million
+conditions. The society-core constructor is asserted to be ove
+r ten million
 parameters, its training is deterministic across identical seeds, and a
 dedicated check proves per-citizen policies react to advisory channels. The
 interface smoke test exercises setup, the guide, layers and the pausing observer
@@ -206,3 +217,11 @@ sanitizer build. See [verification evidence](docs/VERIFICATION.md).
 The simulation and neural network have no third-party dependencies. The desktop
 uses SDL2 under its zlib license. The game's code and original procedural artwork
 are open source under the [MIT license](LICENSE).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and the checks required before opening a pull request.
+
+## Licence
+
+See [LICENSE](LICENSE) for the licence terms.
